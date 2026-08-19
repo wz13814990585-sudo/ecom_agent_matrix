@@ -49,33 +49,37 @@ def test_format_structured_summary():
 
 
 async def test_llm_explain_fallback_without_key():
-    old_key = settings.DEEPSEEK_API_KEY
     old_flag = settings.AGENT_LLM_EXPLAIN_ENABLED
-    settings.DEEPSEEK_API_KEY = ""
-    settings.AGENT_LLM_EXPLAIN_ENABLED = True
-    try:
-        text, source, err = await llm_explain(
-            system_prompt="sys",
-            user_prompt="user",
-            fallback="兜底文案",
-        )
-        assert text == "兜底文案" and source == "template" and err == "no_api_key"
-    finally:
-        settings.DEEPSEEK_API_KEY = old_key
-        settings.AGENT_LLM_EXPLAIN_ENABLED = old_flag
-
-
-async def test_llm_explain_uses_deepseek():
-    from ecom_agent_matrix.core.llm.deepseek_client import DeepSeekChatResult
-
-    old_key = settings.DEEPSEEK_API_KEY
-    old_flag = settings.AGENT_LLM_EXPLAIN_ENABLED
-    settings.DEEPSEEK_API_KEY = "sk-test"
     settings.AGENT_LLM_EXPLAIN_ENABLED = True
     try:
         with patch(
-            "ecom_agent_matrix.modules.utils.llm_explain.deepseek_chat",
-            new=AsyncMock(return_value=DeepSeekChatResult(content="LLM 解读")),
+            "ecom_agent_matrix.modules.utils.llm_explain.is_llm_configured",
+            return_value=False,
+        ):
+            text, source, err = await llm_explain(
+                system_prompt="sys",
+                user_prompt="user",
+                fallback="兜底文案",
+            )
+        assert text == "兜底文案" and source == "template" and err == "no_api_key"
+    finally:
+        settings.AGENT_LLM_EXPLAIN_ENABLED = old_flag
+
+
+async def test_llm_explain_uses_provider():
+    from ecom_agent_matrix.core.llm import ChatResult
+
+    old_flag = settings.AGENT_LLM_EXPLAIN_ENABLED
+    settings.AGENT_LLM_EXPLAIN_ENABLED = True
+    try:
+        with patch(
+            "ecom_agent_matrix.modules.utils.llm_explain.is_llm_configured",
+            return_value=True,
+        ), patch(
+            "ecom_agent_matrix.modules.utils.llm_explain.llm_chat",
+            new=AsyncMock(
+                return_value=ChatResult(content="LLM 解读", provider="deepseek")
+            ),
         ):
             text, source, err = await llm_explain(
                 system_prompt="sys",
@@ -84,7 +88,6 @@ async def test_llm_explain_uses_deepseek():
             )
         assert text == "LLM 解读" and source == "deepseek" and err == ""
     finally:
-        settings.DEEPSEEK_API_KEY = old_key
         settings.AGENT_LLM_EXPLAIN_ENABLED = old_flag
 
 
@@ -92,5 +95,5 @@ if __name__ == "__main__":
     test_ops_report_template_has_actions()
     test_format_structured_summary()
     asyncio.run(test_llm_explain_fallback_without_key())
-    asyncio.run(test_llm_explain_uses_deepseek())
+    asyncio.run(test_llm_explain_uses_provider())
     print("✅ llm_explain / ops_report 结构测试通过")

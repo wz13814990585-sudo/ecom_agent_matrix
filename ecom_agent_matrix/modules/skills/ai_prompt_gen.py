@@ -1,8 +1,7 @@
-"""AI 绘图提示词 Skill（DeepSeek，无 Key 时模板兜底）。"""
+"""AI 绘图提示词 Skill（LLM，无 Key 时模板兜底）。"""
 from __future__ import annotations
 
-from ecom_agent_matrix.config.settings import settings
-from ecom_agent_matrix.core.llm.deepseek_client import deepseek_chat
+from ecom_agent_matrix.core.llm import current_provider_name, is_llm_configured, llm_chat
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
 
@@ -25,7 +24,7 @@ def _template_prompt(product: str, scene: str, style: str) -> str:
 @register_skill
 class AIPromptGenTool(BaseSkill):
     skill_name = "ai_prompt_generate"
-    skill_desc = "商品 AI 绘图提示词生成（DeepSeek），参数 product、scene、style"
+    skill_desc = "商品 AI 绘图提示词生成（LLM），参数 product、scene、style"
 
     async def run(self, params: dict) -> SkillResult:
         try:
@@ -39,7 +38,7 @@ class AIPromptGenTool(BaseSkill):
             source = "template"
             llm_error = ""
             prompt = _template_prompt(product, scene, style)
-            if settings.DEEPSEEK_API_KEY:
+            if is_llm_configured():
                 try:
                     user_prompt = (
                         f"Product: {product}\n"
@@ -48,7 +47,7 @@ class AIPromptGenTool(BaseSkill):
                         "Generate the positive prompt now."
                     )
                     text = (
-                        await deepseek_chat(
+                        await llm_chat(
                             user_prompt=user_prompt,
                             system_prompt=PROMPT_SYSTEM,
                             temperature=0.5,
@@ -58,7 +57,7 @@ class AIPromptGenTool(BaseSkill):
                     ).content.strip()
                     if text:
                         prompt = text
-                        source = "deepseek"
+                        source = current_provider_name()
                     else:
                         llm_error = "empty_content"
                 except Exception as exc:

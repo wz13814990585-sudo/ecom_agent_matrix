@@ -11,7 +11,7 @@ from ecom_agent_matrix.config.constants import (
     TABLE_RISK_LOG,
 )
 from ecom_agent_matrix.config.settings import settings
-from ecom_agent_matrix.core.llm.deepseek_client import deepseek_chat
+from ecom_agent_matrix.core.llm import current_provider_name, is_llm_configured, llm_chat
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
 from ecom_agent_matrix.db.base import AsyncPGClient
@@ -236,7 +236,7 @@ class OpsReportTool(BaseSkill):
             summary = _template_summary(report_type, sections)
             structured: dict = {}
 
-            use_llm = bool(settings.DEEPSEEK_API_KEY) and bool(
+            use_llm = is_llm_configured() and bool(
                 getattr(settings, "AGENT_LLM_EXPLAIN_ENABLED", True)
             )
             if use_llm:
@@ -253,7 +253,7 @@ class OpsReportTool(BaseSkill):
                         "Do not invent metrics not present in the JSON."
                     )
                     text = (
-                        await deepseek_chat(
+                        await llm_chat(
                             user_prompt=user_prompt,
                             system_prompt=(
                                 "You are an ecommerce operations analyst for a cross-border store. "
@@ -269,7 +269,7 @@ class OpsReportTool(BaseSkill):
                     if text:
                         structured = _extract_json(text)
                         summary = _format_structured_summary(structured, summary)
-                        source = "deepseek"
+                        source = current_provider_name()
                     else:
                         llm_error = "empty_content"
                 except Exception as exc:

@@ -1,11 +1,10 @@
-"""广告投放优化 Skill（DeepSeek + 规则兜底）。"""
+"""广告投放优化 Skill（LLM + 规则兜底）。"""
 from __future__ import annotations
 
 import json
 import re
 
-from ecom_agent_matrix.config.settings import settings
-from ecom_agent_matrix.core.llm.deepseek_client import deepseek_chat
+from ecom_agent_matrix.core.llm import current_provider_name, is_llm_configured, llm_chat
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
 
@@ -146,14 +145,14 @@ class AdOptimizeTool(BaseSkill):
             llm_error = ""
             plan = _rule_optimize(metrics)
 
-            if settings.DEEPSEEK_API_KEY:
+            if is_llm_configured():
                 try:
                     user_prompt = (
                         "Optimize this ecommerce ad campaign:\n"
                         f"{json.dumps(metrics, ensure_ascii=False)}\n"
                         f"Rule baseline (may revise):\n{json.dumps(plan, ensure_ascii=False)}"
                     )
-                    raw = await deepseek_chat(
+                    raw = await llm_chat(
                         user_prompt=user_prompt,
                         system_prompt=AD_SYSTEM_PROMPT,
                         temperature=0.2,
@@ -181,7 +180,7 @@ class AdOptimizeTool(BaseSkill):
                         ),
                         "metrics_snapshot": plan["metrics_snapshot"],
                     }
-                    source = "deepseek"
+                    source = raw.provider or current_provider_name()
                 except Exception as exc:
                     llm_error = str(exc)
 

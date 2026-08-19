@@ -39,6 +39,7 @@ class JsonFormatter(logging.Formatter):
             "max_retries",
             "delay_s",
             "status",
+            "provider",
         ):
             if hasattr(record, key):
                 payload[key] = getattr(record, key)

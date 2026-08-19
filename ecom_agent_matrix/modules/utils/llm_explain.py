@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from ecom_agent_matrix.config.settings import settings
-from ecom_agent_matrix.core.llm.deepseek_client import deepseek_chat
+from ecom_agent_matrix.core.llm import current_provider_name, is_llm_configured, llm_chat
 
 
 async def llm_explain(
@@ -15,14 +15,14 @@ async def llm_explain(
 ) -> tuple[str, str, str]:
     """
     返回 (text, source, error)。
-    source: deepseek | template | disabled
+    source: {provider} | template | disabled
     """
     if not getattr(settings, "AGENT_LLM_EXPLAIN_ENABLED", True):
         return fallback, "disabled", ""
-    if not settings.DEEPSEEK_API_KEY:
+    if not is_llm_configured():
         return fallback, "template", "no_api_key"
     try:
-        raw = await deepseek_chat(
+        raw = await llm_chat(
             user_prompt=user_prompt,
             system_prompt=system_prompt,
             temperature=temperature,
@@ -32,6 +32,6 @@ async def llm_explain(
         text = (raw.content or "").strip()
         if not text:
             return fallback, "template", "empty_content"
-        return text, "deepseek", ""
+        return text, raw.provider or current_provider_name(), ""
     except Exception as exc:
         return fallback, "template", str(exc)

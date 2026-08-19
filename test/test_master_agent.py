@@ -171,7 +171,10 @@ def test_rules_without_task_type_uses_keyword():
 
 async def test_llm_fallback_to_keyword():
     with patch(
-        "ecom_agent_matrix.modules.agent_cluster.master_planner.deepseek_chat",
+        "ecom_agent_matrix.modules.agent_cluster.master_planner.is_llm_configured",
+        return_value=True,
+    ), patch(
+        "ecom_agent_matrix.modules.agent_cluster.master_planner.llm_chat",
         new=AsyncMock(side_effect=RuntimeError("llm down")),
     ):
         plan = await plan_sub_tasks_llm({"query": "库存不够了怎么办"}, [])
@@ -182,7 +185,10 @@ async def test_llm_fallback_to_keyword():
 
 async def test_llm_unknown_query_rag_default():
     with patch(
-        "ecom_agent_matrix.modules.agent_cluster.master_planner.deepseek_chat",
+        "ecom_agent_matrix.modules.agent_cluster.master_planner.is_llm_configured",
+        return_value=True,
+    ), patch(
+        "ecom_agent_matrix.modules.agent_cluster.master_planner.llm_chat",
         new=AsyncMock(side_effect=RuntimeError("llm down")),
     ):
         plan = await plan_sub_tasks_llm({"query": "??? unknown xyz"}, [])
@@ -196,14 +202,17 @@ def test_crm_default_alias_goes_rag():
 
 
 async def test_llm_plan_parses_json():
-    from ecom_agent_matrix.core.llm.deepseek_client import DeepSeekChatResult
+    from ecom_agent_matrix.core.llm import ChatResult
 
     llm_json = json.dumps(
         {"agents": [AGENT_QUERY, AGENT_RAG], "confidence": 0.92, "reasoning": "先查数据再对照手册"}
     )
     with patch(
-        "ecom_agent_matrix.modules.agent_cluster.master_planner.deepseek_chat",
-        new=AsyncMock(return_value=DeepSeekChatResult(content=llm_json)),
+        "ecom_agent_matrix.modules.agent_cluster.master_planner.is_llm_configured",
+        return_value=True,
+    ), patch(
+        "ecom_agent_matrix.modules.agent_cluster.master_planner.llm_chat",
+        new=AsyncMock(return_value=ChatResult(content=llm_json)),
     ):
         plan = await plan_sub_tasks_llm({"query": "查订单退款规则"}, [])
     assert plan.planner == "llm"

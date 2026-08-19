@@ -1,11 +1,10 @@
-"""客服答复 Skill：RAG 拼装 + DeepSeek 生成 + 兜底文案（无 MCP 依赖）。"""
+"""客服答复 Skill：RAG 拼装 + LLM 生成 + 兜底文案（无 MCP 依赖）。"""
 from __future__ import annotations
 
 import re
 
 from ecom_agent_matrix.config.constants import LANG_LIST
-from ecom_agent_matrix.config.settings import settings
-from ecom_agent_matrix.core.llm.deepseek_client import deepseek_chat
+from ecom_agent_matrix.core.llm import is_llm_configured, llm_chat
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
 
@@ -127,7 +126,7 @@ class CrmReplyTool(BaseSkill):
             answer_text = ""
             reasoning_content = ""
             llm_ok = False
-            if settings.DEEPSEEK_API_KEY and not is_fallback_route:
+            if is_llm_configured() and not is_fallback_route:
                 try:
                     hist_snip = "\n".join(
                         f"{h.get('role', '?')}: {h.get('content', '')}"
@@ -142,7 +141,7 @@ class CrmReplyTool(BaseSkill):
                             f"{'成功' if taobao_info.get('success') else taobao_info.get('error_msg')}\n"
                             f"{str(taobao_info.get('data') or '')[:800]}"
                         )
-                    answer = await deepseek_chat(
+                    answer = await llm_chat(
                         user_prompt=(
                             f"用户语种偏好: {lang}\n"
                             f"近期对话:\n{hist_snip}\n\n"

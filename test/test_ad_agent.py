@@ -126,8 +126,11 @@ async def test_ad_agent_e2e():
     mock_mem.safe_save_memory = AsyncMock(return_value=True)
 
     # 强制走规则兜底，结果可复现（不依赖外网）
-    old_key = settings.DEEPSEEK_API_KEY
-    settings.DEEPSEEK_API_KEY = ""
+    llm_patch = patch(
+        "ecom_agent_matrix.modules.skills.ad_optimize.is_llm_configured",
+        return_value=False,
+    )
+    llm_patch.start()
 
     agent_task = asyncio.create_task(start_all_agents(), name="agents")
     await asyncio.sleep(0.15)
@@ -211,7 +214,7 @@ async def test_ad_agent_e2e():
         print("\n记忆写入次数:", mock_mem.safe_save_memory.await_count)
 
     finally:
-        settings.DEEPSEEK_API_KEY = old_key
+        llm_patch.stop()
         mem_patch.stop()
         agent_task.cancel()
         try:

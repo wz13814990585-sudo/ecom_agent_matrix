@@ -22,7 +22,7 @@ async def test_all_skill():
     })
     print("利润计算结果：", res1.model_dump())
 
-    # 2. DeepSeek 翻译（translate_tool.py）
+    # 2. LLM 翻译（translate_tool.py）
     translate_cases = [
         {"text": "我是大帅哥", "target_lang": "en"},
         {"text": "平价海边连衣裙", "target_lang": "en"},

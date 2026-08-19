@@ -1,11 +1,11 @@
-"""多语种电商翻译 Skill（DeepSeek）。"""
+"""多语种电商翻译 Skill（LLM）。"""
 from __future__ import annotations
 
 import re
 from typing import Optional
 
 from ecom_agent_matrix.config.constants import LANG_LIST
-from ecom_agent_matrix.core.llm.deepseek_client import deepseek_chat
+from ecom_agent_matrix.core.llm import current_provider_name, llm_chat
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
 
@@ -51,7 +51,7 @@ async def translate_text(
     source_lang: Optional[str] = None,
 ) -> str:
     """
-    电商场景翻译入口：Prompt 拼装 + 调用 DeepSeek。
+    电商场景翻译入口：Prompt 拼装 + 调用当前 LLM Provider。
     同语种直接返回原文。
     """
     text = text.strip()
@@ -63,7 +63,7 @@ async def translate_text(
     if src == lang:
         return text
 
-    return (await deepseek_chat(
+    return (await llm_chat(
         user_prompt=build_translate_prompt(text, lang, src),
         system_prompt=TRANSLATE_SYSTEM_PROMPT,
         temperature=0.1,
@@ -75,7 +75,7 @@ async def translate_text(
 @register_skill
 class TranslateTool(BaseSkill):
     skill_name = "text_translate"
-    skill_desc = "多语种电商文本翻译（DeepSeek），参数 text / target_lang"
+    skill_desc = "多语种电商文本翻译（LLM），参数 text / target_lang"
 
     async def run(self, params: dict) -> SkillResult:
         try:
@@ -95,7 +95,7 @@ class TranslateTool(BaseSkill):
             return SkillResult(
                 success=True,
                 data={
-                    "provider": "deepseek",
+                    "provider": current_provider_name(),
                     "source_lang": source_lang,
                     "target_lang": lang,
                     "source_text": text,

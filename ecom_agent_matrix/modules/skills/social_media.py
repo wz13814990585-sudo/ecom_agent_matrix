@@ -1,9 +1,8 @@
-"""社媒文案生成 Skill（DeepSeek，无 Key 时模板兜底）。"""
+"""社媒文案生成 Skill（LLM，无 Key 时模板兜底）。"""
 from __future__ import annotations
 
 from ecom_agent_matrix.config.constants import LANG_LIST
-from ecom_agent_matrix.config.settings import settings
-from ecom_agent_matrix.core.llm.deepseek_client import deepseek_chat
+from ecom_agent_matrix.core.llm import current_provider_name, is_llm_configured, llm_chat
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
 
@@ -44,7 +43,7 @@ def _template_copy(product_name: str, feature: str, platform: str, lang: str) ->
 class SocialMediaCopyTool(BaseSkill):
     skill_name = "social_media_gen"
     skill_desc = (
-        "社媒带货文案生成（DeepSeek），参数 product_name、feature、platform"
+        "社媒带货文案生成（LLM），参数 product_name、feature、platform"
         f"（支持 {', '.join(sorted(SUPPORTED_PLATFORMS))}）、lang"
     )
 
@@ -71,7 +70,7 @@ class SocialMediaCopyTool(BaseSkill):
             source = "template"
             llm_error = ""
             draft = _template_copy(product_name, feature, platform, lang)
-            if settings.DEEPSEEK_API_KEY:
+            if is_llm_configured():
                 try:
                     lang_name = LANG_NAME.get(lang, lang)
                     user_prompt = (
@@ -82,7 +81,7 @@ class SocialMediaCopyTool(BaseSkill):
                         "Write the caption now."
                     )
                     text = (
-                        await deepseek_chat(
+                        await llm_chat(
                             user_prompt=user_prompt,
                             system_prompt=COPY_SYSTEM_PROMPT,
                             temperature=0.7,
@@ -92,7 +91,7 @@ class SocialMediaCopyTool(BaseSkill):
                     ).content.strip()
                     if text:
                         draft = text
-                        source = "deepseek"
+                        source = current_provider_name()
                     else:
                         llm_error = "empty_content"
                 except Exception as exc:

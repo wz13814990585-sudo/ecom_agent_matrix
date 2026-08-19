@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 from ecom_agent_matrix.config.constants import LANG_LIST
-from ecom_agent_matrix.config.settings import settings
+from ecom_agent_matrix.core.llm import is_llm_configured
 from ecom_agent_matrix.core.logging_config import setup_logger
 from ecom_agent_matrix.core.memory.short_memory import AgentShortMemory
 from ecom_agent_matrix.core.skill.skill_registry import exec_skill
@@ -120,7 +120,7 @@ async def handle_crm(payload: dict, *, task_id: str = "") -> tuple[bool, str, di
         errors.append(f"crm_reply: {reply_res.error_msg or 'failed'}")
     if (
         not llm_ok
-        and settings.DEEPSEEK_API_KEY
+        and is_llm_configured()
         and not is_fallback_route
         and not rag_used
     ):

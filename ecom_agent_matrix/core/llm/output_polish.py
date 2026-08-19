@@ -5,7 +5,7 @@ import json
 from typing import Any
 
 from ecom_agent_matrix.config.settings import settings
-from ecom_agent_matrix.core.llm.deepseek_client import deepseek_chat
+from ecom_agent_matrix.core.llm.router import is_llm_configured, llm_chat
 from ecom_agent_matrix.core.logging_config import setup_logger
 
 logger = setup_logger("llm.output_polish")
@@ -117,7 +117,7 @@ async def polish_final_output(
     将最终结果整理为可读摘要。
     - 关闭开关 / 无 Key：启发式兜底
     - 已有 answer 等可读字段：默认直接返回（CRM 等已生成答复）
-    - 否则调用 DeepSeek 整理
+    - 否则调用当前 LLM Provider 整理
     """
     payload = data if isinstance(data, dict) else {}
 
@@ -131,7 +131,7 @@ async def polish_final_output(
     if prefer_existing_answer and isinstance(payload.get("answer"), str) and payload["answer"].strip():
         return payload["answer"].strip()
 
-    if not settings.DEEPSEEK_API_KEY:
+    if not is_llm_configured():
         return _heuristic_summary(
             success=success, data=payload, error_msg=error_msg, reply_from=reply_from
         )
@@ -174,7 +174,7 @@ async def polish_final_output(
     )
 
     try:
-        text = await deepseek_chat(
+        text = await llm_chat(
             user_prompt=user_prompt,
             system_prompt=_SYSTEM_PROMPT,
             temperature=0.2,

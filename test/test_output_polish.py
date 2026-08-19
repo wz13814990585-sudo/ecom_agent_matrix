@@ -1,4 +1,4 @@
-"""output_polish：启发式整理 +（可选）DeepSeek 联调。"""
+"""output_polish：启发式整理 +（可选）LLM 联调。"""
 from __future__ import annotations
 
 import asyncio
@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ecom_agent_matrix.config.settings import settings
-from ecom_agent_matrix.core.llm.deepseek_client import DeepSeekChatResult
+from ecom_agent_matrix.core.llm import ChatResult, close_http_session, is_llm_configured
 from ecom_agent_matrix.core.llm.output_polish import (
     _extract_existing_answer,
     _heuristic_summary,
@@ -111,20 +111,22 @@ async def test_polish_disabled_uses_heuristic():
 
 
 async def test_polish_llm_mocked():
-    mock_result = DeepSeekChatResult(
+    mock_result = ChatResult(
         content="【成功】已为防水背包生成 TikTok 文案。\n· 文案：Hot waterproof bag!",
         mode="chat",
         model="deepseek-chat",
+        provider="deepseek",
     )
     with patch(
-        "ecom_agent_matrix.core.llm.output_polish.deepseek_chat",
+        "ecom_agent_matrix.core.llm.output_polish.is_llm_configured",
+        return_value=True,
+    ), patch(
+        "ecom_agent_matrix.core.llm.output_polish.llm_chat",
         new=AsyncMock(return_value=mock_result),
     ):
         # 临时确保会走 LLM 分支
         old_enabled = settings.OUTPUT_POLISH_ENABLED
-        old_key = settings.DEEPSEEK_API_KEY
         settings.OUTPUT_POLISH_ENABLED = True
-        settings.DEEPSEEK_API_KEY = old_key or "sk-test"
         try:
             text = await polish_final_output(
                 success=True,
@@ -150,18 +152,18 @@ async def test_polish_llm_mocked():
             print("✅ polish_final_output Mock LLM")
         finally:
             settings.OUTPUT_POLISH_ENABLED = old_enabled
-            settings.DEEPSEEK_API_KEY = old_key
 
 
 async def test_polish_llm_failure_fallback():
     with patch(
-        "ecom_agent_matrix.core.llm.output_polish.deepseek_chat",
+        "ecom_agent_matrix.core.llm.output_polish.is_llm_configured",
+        return_value=True,
+    ), patch(
+        "ecom_agent_matrix.core.llm.output_polish.llm_chat",
         new=AsyncMock(side_effect=RuntimeError("network down")),
     ):
         old_enabled = settings.OUTPUT_POLISH_ENABLED
-        old_key = settings.DEEPSEEK_API_KEY
         settings.OUTPUT_POLISH_ENABLED = True
-        settings.DEEPSEEK_API_KEY = old_key or "sk-test"
         try:
             text = await polish_final_output(
                 success=True,
@@ -173,16 +175,15 @@ async def test_polish_llm_failure_fallback():
             print("✅ LLM 失败时回退启发式")
         finally:
             settings.OUTPUT_POLISH_ENABLED = old_enabled
-            settings.DEEPSEEK_API_KEY = old_key
 
 
-async def test_polish_live_deepseek():
-    """有真实 Key 时打一次 DeepSeek；无 Key 则跳过。"""
-    if not (settings.DEEPSEEK_API_KEY or "").strip():
-        print("⏭ 跳过 live DeepSeek（未配置 DEEPSEEK_API_KEY）")
+async def test_polish_live_llm():
+    """有真实 Key 时打一次当前 LLM Provider；无 Key 则跳过。"""
+    if not is_llm_configured():
+        print("⏭ 跳过 live LLM（当前 LLM_PROVIDER 未配置 API Key）")
         return
     if not settings.OUTPUT_POLISH_ENABLED:
-        print("⏭ 跳过 live DeepSeek（OUTPUT_POLISH_ENABLED=false）")
+        print("⏭ 跳过 live LLM（OUTPUT_POLISH_ENABLED=false）")
         return
 
     text = await polish_final_output(
@@ -213,9 +214,9 @@ async def test_polish_live_deepseek():
         prefer_existing_answer=False,
     )
     assert isinstance(text, str) and len(text) > 5
-    print("=== Live DeepSeek 摘要 ===")
+    print("=== Live LLM 摘要 ===")
     print(text)
-    print("✅ polish_final_output live DeepSeek")
+    print("✅ polish_final_output live LLM")
 
 
 async def main():
@@ -227,10 +228,8 @@ async def main():
     await test_polish_llm_mocked()
     await test_polish_llm_failure_fallback()
     try:
-        await test_polish_live_deepseek()
+        await test_polish_live_llm()
     finally:
-        from ecom_agent_matrix.core.llm.deepseek_client import close_http_session
-
         await close_http_session()
     print("\n全部 output_polish 测试通过")
 

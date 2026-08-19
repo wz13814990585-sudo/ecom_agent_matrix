@@ -26,7 +26,7 @@ from ecom_agent_matrix.config.constants import (
     AGENT_STOCK,
 )
 from ecom_agent_matrix.config.settings import settings
-from ecom_agent_matrix.core.llm.deepseek_client import deepseek_chat, resolve_mode
+from ecom_agent_matrix.core.llm import is_llm_configured, llm_chat, resolve_mode
 from ecom_agent_matrix.core.logging_config import setup_logger
 
 logger = setup_logger("agent.master_planner")
@@ -386,7 +386,7 @@ async def plan_sub_tasks_llm(task_input: dict, memory_hits: list[dict]) -> PlanR
     """
     query = _extract_query(task_input)
 
-    if not settings.DEEPSEEK_API_KEY:
+    if not is_llm_configured():
         result = plan_sub_tasks_keyword(task_input, memory_hits)
         result.reasoning = "未配置 API Key，使用关键词/知识库兜底"
         if result.planner == "keyword":
@@ -403,7 +403,7 @@ async def plan_sub_tasks_llm(task_input: dict, memory_hits: list[dict]) -> PlanR
     )
 
     try:
-        raw = await deepseek_chat(
+        raw = await llm_chat(
             user_prompt=user_prompt,
             system_prompt=PLANNER_SYSTEM_PROMPT,
             temperature=0.1,
@@ -519,7 +519,7 @@ async def react_decide(
     observations: list[dict],
     suggested_agents: list[str],
 ) -> ReactDecision:
-    if not settings.DEEPSEEK_API_KEY:
+    if not is_llm_configured():
         return react_decide_rules(working, observations, suggested_agents)
 
     user_prompt = (
@@ -529,7 +529,7 @@ async def react_decide(
         "Decide the next single action."
     )
     try:
-        raw = await deepseek_chat(
+        raw = await llm_chat(
             user_prompt=user_prompt,
             system_prompt=REACT_SYSTEM_PROMPT,
             temperature=0.1,

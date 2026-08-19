@@ -39,7 +39,14 @@ class Settings(BaseSettings):
     EMBED_MODEL_PATH: str = "./models/bge-small-en-v1.5"
     RERANK_MODEL_PATH: str = "./models/bge-reranker-base"
 
-    # DeepSeek API
+    # LLM 路由（架构层；具体供应商只是实现）
+    LLM_PROVIDER: str = "deepseek"  # deepseek | openai
+    LLM_DEFAULT_MODE: str = "chat"  # chat | reasoner
+    LLM_TIMEOUT: float = 60.0
+    LLM_MAX_RETRIES: int = 2  # 429/503/网络超时额外重试次数
+    LLM_RETRY_BASE_DELAY: float = 0.8  # 指数退避基数（秒）
+
+    # DeepSeek
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
     # 兼容旧配置：未单独配置 CHAT_MODEL 时回退到 DEEPSEEK_MODEL
@@ -48,9 +55,17 @@ class Settings(BaseSettings):
     DEEPSEEK_REASONER_MODEL: str = "deepseek-reasoner"
     DEEPSEEK_DEFAULT_MODE: str = "chat"  # chat | reasoner
     DEEPSEEK_TIMEOUT: float = 60.0
-    DEEPSEEK_MAX_RETRIES: int = 2  # 429/503/网络超时额外重试次数
-    DEEPSEEK_RETRY_BASE_DELAY: float = 0.8  # 指数退避基数（秒）
+    DEEPSEEK_MAX_RETRIES: int = 2
+    DEEPSEEK_RETRY_BASE_DELAY: float = 0.8
     DEEPSEEK_REASONER_MIN_TOKENS: int = 1024  # reasoner 的 max_tokens 下限（含思考链）
+
+    # OpenAI
+    OPENAI_API_KEY: str = ""
+    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
+    OPENAI_CHAT_MODEL: str = "gpt-4o-mini"
+    OPENAI_REASONER_MODEL: str = "o4-mini"
+    OPENAI_TIMEOUT: float = 60.0
+    OPENAI_REASONER_MIN_TOKENS: int = 1024
 
     # 淘宝开放平台 TOP（taobao_api skill；未配置则 skill 直接失败）
     TAOBAO_APP_KEY: str = ""

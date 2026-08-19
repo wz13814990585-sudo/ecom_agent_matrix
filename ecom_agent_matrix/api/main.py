@@ -16,7 +16,7 @@ from ecom_agent_matrix.api.route_task import router as task_router
 from ecom_agent_matrix.api.route_warn import router as warn_router
 from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.core.logging_config import setup_logger
-from ecom_agent_matrix.core.llm.deepseek_client import close_http_session
+from ecom_agent_matrix.core.llm import close_http_session
 from ecom_agent_matrix.core.mcp.registry import agent_map, start_all_agents
 from ecom_agent_matrix.core.skill.skill_registry import skill_container
 
