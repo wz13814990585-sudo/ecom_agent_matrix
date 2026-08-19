@@ -12,14 +12,14 @@ class StockPredictTool(BaseSkill):
     skill_name = "stock_predict"
     skill_desc = (
         "商品库存备货预测，参数 sku、predict_days（默认7）、"
-        "history_records（可选，该 SKU 历史预测记忆）"
+        "history_records（已废弃，仅保留调用兼容，不参与预测）"
     )
 
     async def run(self, params: dict) -> SkillResult:
         try:
             sku = params["sku"]
             predict_days = int(params.get("predict_days", 7))
-            history_records = params.get("history_records") or []
+            # history_records 可继续传入，但历史模型预测不是 observed truth，故完全忽略。
 
             # 统计近30天有效销量（剔除退款订单）
             stat_sql = """
@@ -33,27 +33,7 @@ class StockPredictTool(BaseSkill):
             safety_stock_rate = 1.2
             base_suggest = round(daily_avg * predict_days * safety_stock_rate)
 
-            # 结合同 SKU 历史建议量做平滑（若有历史记忆）
-            hist_amounts = []
-            for hit in history_records:
-                meta = hit.get("meta") or {}
-                if isinstance(meta, str):
-                    continue
-                amt = meta.get("suggest_stock_amount")
-                if amt is not None:
-                    try:
-                        hist_amounts.append(float(amt))
-                    except (TypeError, ValueError):
-                        pass
-
-            if hist_amounts:
-                hist_avg = sum(hist_amounts) / len(hist_amounts)
-                # 70% 当前销量模型 + 30% 历史建议，避免单次波动过大
-                suggest_stock = round(base_suggest * 0.7 + hist_avg * 0.3)
-                adjusted = True
-            else:
-                suggest_stock = base_suggest
-                adjusted = False
+            suggest_stock = base_suggest
 
             return SkillResult(
                 success=True,
@@ -62,8 +42,8 @@ class StockPredictTool(BaseSkill):
                     "predict_cycle": predict_days,
                     "suggest_stock_amount": suggest_stock,
                     "base_suggest_stock_amount": base_suggest,
-                    "history_used": len(hist_amounts),
-                    "history_adjusted": adjusted,
+                    "history_used": 0,
+                    "history_adjusted": False,
                 },
             )
         except KeyError as err:

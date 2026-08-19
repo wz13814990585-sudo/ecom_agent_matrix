@@ -12,6 +12,9 @@ UNSUPPORTED_PLATFORM = "UNSUPPORTED_PLATFORM"
 SKILL_FAILED = "SKILL_FAILED"
 WORKFLOW_TIMEOUT = "WORKFLOW_TIMEOUT"
 PARTIAL_SUCCESS = "PARTIAL_SUCCESS"
+MISSING_SKU = "MISSING_SKU"
+MISSING_COMPETITOR = "MISSING_COMPETITOR"
+PRICE_UNAVAILABLE = "PRICE_UNAVAILABLE"
 
 
 class WorkflowResult(BaseModel):
@@ -22,6 +25,16 @@ class WorkflowResult(BaseModel):
     partial_success: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    def to_legacy_data(self) -> dict[str, Any]:
+        """保留 tuple 形状，同时携带 typed workflow 状态。"""
+        data = deepcopy(self.data)
+        data["_workflow"] = {
+            "error_code": self.error_code,
+            "partial_success": self.partial_success,
+            "metadata": deepcopy(self.metadata),
+        }
+        return data
+
     def as_legacy_tuple(self) -> tuple[bool, str, dict]:
         """兼容现有 Handler 的 ``(ok, error_msg, data)`` 返回值。"""
-        return self.success, self.error_msg, deepcopy(self.data)
+        return self.success, self.error_msg, self.to_legacy_data()
