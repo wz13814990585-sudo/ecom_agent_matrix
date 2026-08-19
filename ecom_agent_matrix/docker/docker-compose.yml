@@ -1,8 +1,7 @@
 # 在项目根目录执行:
 #   docker compose -f ecom_agent_matrix/docker/docker-compose.yml up --build
 #
-# Postgres/Redis 密码与库名读取根目录 .env（PG_PWD / PG_USER / PG_DB / REDIS_PASSWORD）
-# 生产请设置 API_KEY，且勿把 DB/Redis 端口暴露到公网。
+# Local interview/demo environment only. This is not a production deployment manifest.
 
 services:
   api:
@@ -15,12 +14,22 @@ services:
       - ../../.env
     environment:
       PG_HOST: postgres
+      PG_USER: ${PG_USER:-postgres}
+      PG_PWD: ${PG_PWD:-postgres}
+      PG_DB: ${PG_DB:-ecom_matrix}
       REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     depends_on:
       postgres:
-        condition: service_started
+        condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   postgres:
     image: pgvector/pgvector:pg16
@@ -33,6 +42,20 @@ services:
       - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ../db/business_tables.sql:/docker-entrypoint-initdb.d/01-business.sql:ro
+      - ../db/vector_tables.sql:/docker-entrypoint-initdb.d/02-vector.sql:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" &&
+          psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -tAc
+          "SELECT to_regclass('public.ecom_goods') IS NOT NULL AND to_regclass('public.vector_goods_kb') IS NOT NULL"
+          | grep -q t
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
@@ -46,6 +69,19 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     ports:
       - "127.0.0.1:6379:6379"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          if [ -n "$$REDIS_PASSWORD" ]; then
+            redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG;
+          else
+            redis-cli ping | grep -q PONG;
+          fi
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
 volumes:
   pgdata:

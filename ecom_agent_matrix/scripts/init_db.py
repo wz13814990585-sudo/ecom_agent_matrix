@@ -1,6 +1,5 @@
 """一键初始化所有数据库表。"""
 import asyncio
-import re
 import sys
 from pathlib import Path
 
@@ -15,17 +14,84 @@ from ecom_agent_matrix.db.base import AsyncPGClient
 
 
 def split_sql_statements(sql_text: str) -> list[str]:
-    """按分号拆分 SQL，去掉注释行，跳过空语句。"""
-    statements = []
-    for part in re.split(r";\s*\n", sql_text):
-        lines = [
-            line
-            for line in part.strip().splitlines()
-            if line.strip() and not line.strip().startswith("--")
-        ]
-        stmt = "\n".join(lines).strip()
-        if stmt:
-            statements.append(stmt)
+    """Split SQL without breaking quoted strings or PostgreSQL dollar blocks."""
+    statements: list[str] = []
+    buffer: list[str] = []
+    index = 0
+    quote = ""
+    dollar_tag = ""
+    line_comment = False
+    block_comment = False
+    length = len(sql_text)
+    while index < length:
+        char = sql_text[index]
+        pair = sql_text[index:index + 2]
+        if line_comment:
+            if char == "\n":
+                line_comment = False
+                buffer.append(char)
+            index += 1
+            continue
+        if block_comment:
+            if pair == "*/":
+                block_comment = False
+                index += 2
+            else:
+                index += 1
+            continue
+        if dollar_tag:
+            if sql_text.startswith(dollar_tag, index):
+                buffer.append(dollar_tag)
+                index += len(dollar_tag)
+                dollar_tag = ""
+            else:
+                buffer.append(char)
+                index += 1
+            continue
+        if quote:
+            buffer.append(char)
+            if char == quote:
+                if index + 1 < length and sql_text[index + 1] == quote:
+                    buffer.append(sql_text[index + 1])
+                    index += 2
+                    continue
+                quote = ""
+            index += 1
+            continue
+        if pair == "--":
+            line_comment = True
+            index += 2
+            continue
+        if pair == "/*":
+            block_comment = True
+            index += 2
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            buffer.append(char)
+            index += 1
+            continue
+        if char == "$":
+            end = sql_text.find("$", index + 1)
+            if end != -1:
+                candidate = sql_text[index:end + 1]
+                tag_body = candidate[1:-1]
+                if not tag_body or tag_body.replace("_", "a").isalnum():
+                    dollar_tag = candidate
+                    buffer.append(candidate)
+                    index = end + 1
+                    continue
+        if char == ";":
+            statement = "".join(buffer).strip()
+            if statement:
+                statements.append(statement)
+            buffer = []
+        else:
+            buffer.append(char)
+        index += 1
+    statement = "".join(buffer).strip()
+    if statement:
+        statements.append(statement)
     return statements
 
 

@@ -16,6 +16,7 @@ import asyncio
 import json
 
 from ecom_agent_matrix.config.constants import TABLE_GOODS, TABLE_VECTOR_GOODS
+from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.db.base import AsyncPGClient
 from ecom_agent_matrix.modules.rag.embedding import (
     get_text_embeddings_batch,
@@ -37,6 +38,25 @@ def _chunk_for_lang(row: dict, lang: str) -> str:
     title = title_map.get(lang) or row.get("title_en") or row.get("title_zh") or row["sku"]
     desc = (row.get("desc_multi") or "").strip()
     return f"{title}. {desc} SKU={row['sku']} category={row.get('category') or ''}".strip()
+
+
+def _demo_knowledge_payloads() -> list[tuple[str, str, str, str, str, dict]]:
+    """Small portfolio fixture used by the documented composite RAG demo."""
+    return [
+        (
+            "demo_tenant",
+            "demo_store",
+            "KB-REFUND-POLICY",
+            "zh",
+            "演示店铺退款规则：未使用且保持完好的商品可在收货后 30 天内申请退款；已发货订单需联系客服确认退货流程。",
+            {
+                "lang": "zh",
+                "category": "store_policy",
+                "source": "demo_refund_policy_fixture",
+                "demo": True,
+            },
+        )
+    ]
 
 
 async def sync_and_reembed_goods(batch_size: int) -> int:
@@ -65,7 +85,7 @@ async def sync_and_reembed_goods(batch_size: int) -> int:
     await AsyncPGClient.execute_sql(f"TRUNCATE {TABLE_VECTOR_GOODS} RESTART IDENTITY")
 
     langs = ["en", "zh", "es", "fr"]
-    payloads: list[tuple[str, str, str, str, str, dict]] = []
+    payloads: list[tuple[str, str, str, str, str, dict]] = _demo_knowledge_payloads()
     for g in goods:
         for lang in langs:
             chunk = _chunk_for_lang(g, lang)
@@ -78,7 +98,7 @@ async def sync_and_reembed_goods(batch_size: int) -> int:
             }
             payloads.append((g["tenant_id"], g["store_id"], g["sku"], lang, chunk, meta))
 
-    # 若超过 100 条目标，截断到 100（用户之前要求每表 100）
+    # Keep the local demo index bounded while reserving its explicit policy fixture.
     if len(payloads) > 100:
         # 优先保证 sku 覆盖：轮询语种截断
         payloads = payloads[:100]
@@ -150,7 +170,14 @@ async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--only", choices=["all", "goods", "memory"], default="all")
     parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=300.0,
+        help="model load/encode timeout for this offline indexing run",
+    )
     args = parser.parse_args()
+    settings.EMBEDDING_TIMEOUT_SECONDS = max(1.0, float(args.timeout))
 
     print(f"模型: {resolve_embed_model_name()}")
     goods_n = mem_n = 0

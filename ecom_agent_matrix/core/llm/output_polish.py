@@ -39,7 +39,7 @@ def _extract_existing_answer(data: dict[str, Any]) -> str:
         if isinstance(val, str) and val.strip():
             return val.strip()
 
-    # Master ReAct：最后一步 finish 的 final_answer
+    # Recovery-only ReAct: final_answer from its terminal finish action.
     trace = data.get("react_trace")
     if isinstance(trace, list) and trace:
         last = trace[-1]

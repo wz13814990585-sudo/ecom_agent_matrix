@@ -3,6 +3,8 @@
 
 用法:
   python -m ecom_agent_matrix.scripts.smoke_e2e --mode social
+  python -m ecom_agent_matrix.scripts.smoke_e2e --mode fast-path --transport http --api-key YOUR_KEY
+  python -m ecom_agent_matrix.scripts.smoke_e2e --mode risk --transport http --api-key YOUR_KEY
   python -m ecom_agent_matrix.scripts.smoke_e2e --mode competitor
   python -m ecom_agent_matrix.scripts.smoke_e2e --mode customer
   python -m ecom_agent_matrix.scripts.smoke_e2e --mode social --transport http --base-url http://127.0.0.1:8000
@@ -36,6 +38,36 @@ logger = setup_logger("smoke_e2e")
 
 def _build_payload(mode: str) -> tuple[str, dict, int]:
     """返回 (target_or_path_hint, content, priority)。"""
+    if mode == "fast-path":
+        return (
+            AGENT_MASTER,
+            {
+                "query": "查询 SKU-BAG-001 商品信息",
+                "task_type": "goods_search",
+                "sku": "SKU-BAG-001",
+            },
+            MSG_PRIORITY_NORMAL,
+        )
+    if mode == "rag":
+        return (
+            AGENT_MASTER,
+            {
+                "query": "防水户外背包有什么特点？",
+                "user_query": "防水户外背包有什么特点？",
+                "lang": "zh",
+                "use_rag": True,
+                "task_type": "knowledge_qa",
+            },
+            MSG_PRIORITY_CUSTOMER,
+        )
+    if mode == "composite":
+        return (
+            AGENT_MASTER,
+            {
+                "query": "根据 ORD-20260301-001 的订单状态和退款规则帮我回复客户",
+            },
+            MSG_PRIORITY_CUSTOMER,
+        )
     if mode == "competitor":
         return (
             AGENT_MASTER,
@@ -57,7 +89,6 @@ def _build_payload(mode: str) -> tuple[str, dict, int]:
                 "lang": "zh",
                 "use_rag": True,
                 "task_type": "knowledge_qa",
-                "task_type": "knowledge_qa",
             },
             MSG_PRIORITY_CUSTOMER,
         )
@@ -74,6 +105,15 @@ def _build_payload(mode: str) -> tuple[str, dict, int]:
 
 
 async def _run_mcp(mode: str, timeout: float) -> dict:
+    if mode == "risk":
+        return {
+            "transport": "mcp",
+            "success": True,
+            "skipped": True,
+            "error_msg": "risk approval demo requires authenticated HTTP transport",
+            "data": {},
+            "summary": "Use --transport http for the approval flow.",
+        }
     target, content, priority = _build_payload(mode)
     task_id = str(uuid.uuid4())
     GatewayResultWaiter.begin(task_id)
@@ -114,12 +154,15 @@ async def _run_http(mode: str, base_url: str, timeout: float, api_key: str) -> d
     elif settings.API_KEY:
         headers["X-API-Key"] = settings.API_KEY
 
-    if mode == "customer":
+    if mode in {"customer", "rag"}:
         path = "/api/v1/customer/chat"
         body = {
-            "query": "你好，我想咨询退款流程",
+            "query": (
+                "防水户外背包有什么特点？"
+                if mode == "rag" else "你好，我想咨询退款流程"
+            ),
             "lang": "zh",
-            "use_rag": False,
+            "use_rag": mode == "rag",
             "timeout": timeout,
         }
     elif mode == "competitor":
@@ -131,6 +174,32 @@ async def _run_http(mode: str, base_url: str, timeout: float, api_key: str) -> d
             "via_master": True,
             "timeout": timeout,
         }
+    elif mode == "fast-path":
+        path = "/api/v1/tasks"
+        body = {
+            "query": "查询 SKU-BAG-001 商品信息",
+            "task_type": "goods_search",
+            "payload": {"sku": "SKU-BAG-001"},
+            "timeout": timeout,
+        }
+    elif mode == "composite":
+        path = "/api/v1/tasks"
+        body = {
+            "query": "根据 ORD-20260301-001 的订单状态和退款规则帮我回复客户",
+            "timeout": timeout,
+        }
+    elif mode == "risk":
+        path = "/api/v1/tasks"
+        body = {
+            "query": "检查高风险订单 ORD-DEMO-RISK",
+            "task_type": "risk_control",
+            "payload": {
+                "order_no": "ORD-DEMO-RISK",
+                "total_amount": 501,
+                "buy_count": 1,
+            },
+            "timeout": timeout,
+        }
     else:
         path = "/api/v1/tasks"
         body = {
@@ -140,31 +209,99 @@ async def _run_http(mode: str, base_url: str, timeout: float, api_key: str) -> d
             "timeout": timeout,
         }
 
-    timeout_cfg = aiohttp.ClientTimeout(total=timeout + 10)
-    async with aiohttp.ClientSession(timeout=timeout_cfg) as session:
-        async with session.post(f"{base}{path}", headers=headers, json=body) as resp:
+    async def post_json(session, request_path, *, request_headers, request_body=None):
+        async with session.post(
+            f"{base}{request_path}", headers=request_headers, json=request_body
+        ) as resp:
             text = await resp.text()
             try:
                 data = json.loads(text) if text else {}
             except json.JSONDecodeError:
                 data = {"raw": text}
+            return resp.status, data
+
+    def find_approval_id(value):
+        if isinstance(value, dict):
+            if value.get("approval_id"):
+                return str(value["approval_id"])
+            for child in value.values():
+                found = find_approval_id(child)
+                if found:
+                    return found
+        elif isinstance(value, list):
+            for child in value:
+                found = find_approval_id(child)
+                if found:
+                    return found
+        return ""
+
+    timeout_cfg = aiohttp.ClientTimeout(total=timeout + 10)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout_cfg) as session:
+            http_status, data = await post_json(
+                session, path, request_headers=headers, request_body=body
+            )
+            if mode == "risk":
+                approval_id = find_approval_id(data)
+                if http_status != 200 or not approval_id:
+                    return {
+                        "transport": "http", "path": path, "http_status": http_status,
+                        "success": False, "error_msg": "approval was not created",
+                        "summary": data.get("summary") or "", "data": data,
+                    }
+                approve_status, approve_data = await post_json(
+                    session,
+                    f"/api/v1/approvals/{approval_id}/approve",
+                    request_headers=headers,
+                )
+                approved_headers = {**headers, "X-Approval-Id": approval_id}
+                final_status, final_data = await post_json(
+                    session, path, request_headers=approved_headers, request_body=body
+                )
+                return {
+                    "transport": "http",
+                    "path": path,
+                    "http_status": final_status,
+                    "success": (
+                        approve_status == 200
+                        and final_status == 200
+                        and bool(final_data.get("success"))
+                    ),
+                    "error_msg": final_data.get("error_msg") or final_data.get("detail") or "",
+                    "summary": final_data.get("summary") or "",
+                    "data": {
+                        "approval_id": approval_id,
+                        "initial": data,
+                        "approval": approve_data,
+                        "resubmission": final_data,
+                    },
+                }
             return {
                 "transport": "http",
-                "http_status": resp.status,
+                "http_status": http_status,
                 "path": path,
-                "success": resp.status == 200 and bool(data.get("success")),
+                "success": http_status == 200 and bool(data.get("success")),
                 "error_msg": data.get("error_msg") or data.get("detail") or "",
                 "summary": data.get("summary") or "",
                 "data": data,
             }
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        return {
+            "transport": "http", "path": path, "http_status": 0,
+            "success": False, "error_msg": f"dependency unavailable: {type(exc).__name__}",
+            "summary": "", "data": {},
+        }
 
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Ecom Agent Matrix smoke e2e")
     parser.add_argument(
         "--mode",
-        choices=["social", "competitor", "customer"],
-        default="social",
+        choices=[
+            "fast-path", "rag", "composite", "risk",
+            "social", "competitor", "customer",
+        ],
+        default="fast-path",
     )
     parser.add_argument("--transport", choices=["mcp", "http"], default="mcp")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")

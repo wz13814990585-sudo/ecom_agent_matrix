@@ -1,4 +1,4 @@
-"""自动化运营任务接口（经 Master ReAct）。"""
+"""自动化运营任务接口（经 Master Fast Path / Typed DAG / Recovery）。"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends

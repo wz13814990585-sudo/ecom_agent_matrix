@@ -50,7 +50,7 @@ _accepting_requests = True
 
 _OPENAPI_TAGS = [
     {"name": "system", "description": "健康检查与注册表"},
-    {"name": "tasks", "description": "经 Master ReAct 的通用运营任务"},
+    {"name": "tasks", "description": "经 Master Fast Path / Typed DAG / Recovery 的通用运营任务"},
     {"name": "customer", "description": "店铺规则 / 售后问答（经 Master → RAG 或查询）"},
     {"name": "warn", "description": "竞品价格查询（经 Master 或直达 Query）"},
     {"name": "approvals", "description": "高风险写操作人工审批"},
