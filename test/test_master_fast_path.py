@@ -112,8 +112,10 @@ def test_fast_path_skips_planner_react_and_master_memory():
             "error_msg": "",
             "timed_out": False,
         }
-        with patch.object(master_module, "plan_sub_tasks_llm", new=AsyncMock()) as planner, patch.object(
-            master_module, "react_decide", new=AsyncMock()
+        with patch.object(
+            master_module.typed_master_planner, "plan", new=AsyncMock()
+        ) as planner, patch.object(
+            master_module.recovery_controller, "run", new=AsyncMock()
         ) as react, patch.object(
             master_module, "_react_call_one", new=AsyncMock(return_value=observation)
         ), patch.object(
@@ -378,7 +380,7 @@ def test_complex_master_memory_is_compact_and_excludes_raw_payloads():
 
     saved = asyncio.run(scenario())
     content = json.loads(saved["content"])
-    assert set(content) == {"task_type", "plan", "step_statuses", "usage"}
+    assert set(content) == {"task_type", "plan", "step_statuses", "usage", "recovery"}
     assert set(content["plan"]) == {"reason_code", "confidence", "source", "steps"}
     serialized = json.dumps(content, ensure_ascii=False)
     assert "MUST_NOT_PERSIST" not in serialized

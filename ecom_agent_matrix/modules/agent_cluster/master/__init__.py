@@ -2,6 +2,7 @@
 
 from .executor import MasterPlanExecutor
 from .planner import TypedMasterPlanner
+from .recovery import apply_recovery_decision
 from .schemas import MasterPlan, PlanExecutionResult, PlanStep, StepResult
 
 __all__ = [
@@ -11,4 +12,5 @@ __all__ = [
     "PlanStep",
     "StepResult",
     "TypedMasterPlanner",
+    "apply_recovery_decision",
 ]

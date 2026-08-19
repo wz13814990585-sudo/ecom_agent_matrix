@@ -91,8 +91,6 @@ class MasterPlanExecutor:
         root_message: MCPMessage,
     ) -> PlanExecutionResult:
         validate_master_plan(plan)
-        started = time.perf_counter()
-        steps = {step.step_id: step for step in plan.steps}
         results = {
             step.step_id: StepResult(
                 step_id=step.step_id,
@@ -102,6 +100,60 @@ class MasterPlanExecutor:
             )
             for step in plan.steps
         }
+        return await self._run(plan, root_message, results)
+
+    async def resume(
+        self,
+        plan: MasterPlan,
+        root_message: MCPMessage,
+        previous: PlanExecutionResult,
+        *,
+        retry_step_ids: set[str],
+    ) -> PlanExecutionResult:
+        """从已验证 DAG 恢复：保留成功步骤，仅重置指定重试和曾因依赖失败而跳过的步骤。"""
+        validate_master_plan(plan)
+        known = {step.step_id for step in plan.steps}
+        unknown = set(retry_step_ids) - known
+        if unknown:
+            raise ValueError(f"retry step does not exist: {', '.join(sorted(unknown))}")
+
+        results: dict[str, StepResult] = {}
+        for step in plan.steps:
+            old = previous.step_results.get(step.step_id)
+            reusable = (
+                old is not None
+                and old.agent == step.agent
+                and old.task_type == step.task_type
+                and old.status == "SUCCESS"
+                and step.step_id not in retry_step_ids
+            )
+            if reusable:
+                results[step.step_id] = old
+                continue
+            should_reset = (
+                old is None
+                or step.step_id in retry_step_ids
+                or old.status in {"SKIPPED", "PENDING"}
+            )
+            if should_reset:
+                results[step.step_id] = StepResult(
+                    step_id=step.step_id,
+                    agent=step.agent,
+                    task_type=step.task_type,
+                    status="PENDING",
+                )
+            else:
+                results[step.step_id] = old
+        return await self._run(plan, root_message, results)
+
+    async def _run(
+        self,
+        plan: MasterPlan,
+        root_message: MCPMessage,
+        results: dict[str, StepResult],
+    ) -> PlanExecutionResult:
+        started = time.perf_counter()
+        steps = {step.step_id: step for step in plan.steps}
 
         while any(result.status == "PENDING" for result in results.values()):
             state_changed = False

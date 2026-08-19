@@ -1,4 +1,4 @@
-"""总控规划 Agent（ReAct 多轮编排）。"""
+"""Master Agent：Fast Path + Typed DAG planning + recovery orchestration。"""
 from __future__ import annotations
 
 import asyncio
@@ -21,14 +21,9 @@ from ecom_agent_matrix.core.llm.output_polish import polish_final_output
 from ecom_agent_matrix.modules.agent_cluster.master.executor import MasterPlanExecutor
 from ecom_agent_matrix.modules.agent_cluster.master.planner import typed_master_planner
 from ecom_agent_matrix.modules.agent_cluster.master.react import recovery_controller
+from ecom_agent_matrix.modules.agent_cluster.master.recovery import apply_recovery_decision
 from ecom_agent_matrix.modules.agent_cluster.master.schemas import PlanExecutionResult
 from ecom_agent_matrix.modules.agent_cluster.master.telemetry import MasterLLMTelemetry
-from ecom_agent_matrix.modules.agent_cluster.master_planner import (
-    merge_observation_into_working,
-    plan_sub_tasks_llm,
-    react_decide,
-    should_save_to_memory,
-)
 from ecom_agent_matrix.modules.agent_cluster.master_router import (
     MasterRouteDecision,
     route_master_task,
@@ -215,6 +210,7 @@ async def _save_plan_memory(
     plan: Any,
     execution: PlanExecutionResult,
     usage: dict[str, Any],
+    recovery_actions: list[dict[str, Any]] | None = None,
 ) -> None:
     """Complex plan 仅保存紧凑状态，不持久化 payload/result/reasoning。"""
     compact = {
@@ -242,6 +238,10 @@ async def _save_plan_memory(
             for step_id, result in execution.step_results.items()
         },
         "usage": usage,
+        "recovery": {
+            "actions": list(recovery_actions or []),
+            "final_status": "SUCCESS" if execution.all_success else "FAILED",
+        },
     }
     await long_mem.safe_save_memory(
         agent_name=AGENT_MASTER,
@@ -300,15 +300,47 @@ async def _process_complex_plan(
         )
         return
 
-    execution = await MasterPlanExecutor().execute(plan, msg)
-    recovery = (
-        await recovery_controller.run(execution, telemetry)
-        if not execution.all_success
-        else None
-    )
+    executor = MasterPlanExecutor()
+    execution = await executor.execute(plan, msg)
+    recovery_actions: list[dict[str, Any]] = []
+    terminal_recovery = None
+    for _ in range(max(0, int(settings.MASTER_RECOVERY_MAX_STEPS))):
+        if execution.all_success:
+            break
+        decision = await recovery_controller.run(execution, telemetry)
+        if decision is None:
+            break
+        applied = await apply_recovery_decision(
+            decision,
+            plan=plan,
+            execution=execution,
+            root_message=msg,
+            task_input=task_input,
+            executor=executor,
+            planner=typed_master_planner,
+            telemetry=telemetry,
+        )
+        plan = applied.plan
+        execution = applied.execution
+        terminal_recovery = applied.decision
+        recovery_actions.append(
+            {
+                "action": applied.decision.action,
+                "step_id": applied.decision.step_id,
+                "reason_code": applied.decision.reason_code,
+            }
+        )
+        if applied.decision.action in {"finish", "clarify"}:
+            break
+        if not applied.continue_recovery:
+            break
+
     summary = ""
-    if recovery is not None:
-        summary = recovery.final_answer or recovery.clarification_question
+    if terminal_recovery is not None:
+        summary = (
+            terminal_recovery.final_answer
+            or terminal_recovery.clarification_question
+        )
     if not summary:
         summary = _execution_summary(execution)
 
@@ -334,7 +366,11 @@ async def _process_complex_plan(
         "summary": summary,
         "plan": plan.model_dump(),
         "route": route.model_dump(),
-        "recovery": recovery.model_dump() if recovery is not None else None,
+        "recovery": {
+            "attempted": bool(recovery_actions),
+            "actions": recovery_actions,
+            "final_status": "SUCCESS" if execution.all_success else "FAILED",
+        },
         "master_llm_usage": usage,
         "master_llm_calls": calls,
         "metadata": {
@@ -360,6 +396,7 @@ async def _process_complex_plan(
             plan=plan,
             execution=execution,
             usage=usage,
+            recovery_actions=recovery_actions,
         )
     except Exception as exc:
         logger.warning(
@@ -436,11 +473,7 @@ async def execute_fast_path(
 
 
 async def process_master_task(msg: MCPMessage, long_mem: AgentLongVectorMemory) -> None:
-    """
-    ReAct 主流程：
-    召回 → 初始规划（建议序列）→ 逐步 Thought/Action/Observation → 聚合回传 → 条件记忆。
-    子 Agent 仅 Query / Exec / RAG；SKU 解析在 Query 内部完成。
-    """
+    """Route to Fast Path or validated DAG, then apply bounded recovery if needed."""
     task_id = msg.task_id
     started = time.perf_counter()
     task_input = dict(msg.content or {})

@@ -105,9 +105,16 @@ class TypedMasterPlanner:
                 "当前复杂规划预算已用尽，请缩小请求范围后重试。",
             )
 
+        recovery_context = task_input.get("_recovery_context")
+        recovery_block = ""
+        if isinstance(recovery_context, dict):
+            recovery_block = (
+                "\nCompact recovery context:\n"
+                f"{json.dumps(recovery_context, ensure_ascii=False, default=str)[:1800]}\n"
+            )
         prompt = (
-            f"User request:\n{_query(task_input)[:1200]}\n\n"
-            "Return a validated dependency plan."
+            f"User request:\n{_query(task_input)[:1200]}\n"
+            f"{recovery_block}\nReturn a validated dependency plan."
         )
         try:
             raw = await llm_chat(
