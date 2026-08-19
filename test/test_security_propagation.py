@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -9,7 +10,7 @@ from ecom_agent_matrix.config.constants import AGENT_EXEC, AGENT_MASTER, AGENT_Q
 from ecom_agent_matrix.core.mcp.message import MCPMessage
 from ecom_agent_matrix.core.mcp.reply import build_reply
 from ecom_agent_matrix.core.mcp.task_waiter import TaskReplyWaiter
-from ecom_agent_matrix.core.security import SecurityContext
+from ecom_agent_matrix.core.security import ApprovalGrant, SecurityContext
 from ecom_agent_matrix.core.security.errors import AuthorizationError
 from ecom_agent_matrix.api.dispatch import dispatch_and_wait
 from ecom_agent_matrix.core.mcp.registry import agent_map
@@ -34,6 +35,16 @@ def _root(security=None) -> MCPMessage:
     return MCPMessage(
         task_id="root", correlation_id="gateway", sender="api_gateway",
         target=AGENT_MASTER, content={"query": "q"}, security=security,
+    )
+
+
+def _approval() -> ApprovalGrant:
+    return ApprovalGrant(
+        approval_id="00000000-0000-0000-0000-000000000001",
+        task_id="root", tenant_id="t", store_id="store",
+        requester_user_id="u", approver_user_id="approver",
+        skill_name="record_order_risk", params_hash="a" * 64,
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
 
 
@@ -69,6 +80,32 @@ def test_api_dispatch_places_security_on_root_mcp_message():
             target=AGENT_MASTER, content={"query": "q"}, priority=1, security=security,
         ))
     assert captured[0].security is security
+
+
+def test_api_dispatch_places_verified_approval_on_trusted_envelope():
+    security = _admin()
+    grant = _approval()
+    captured = []
+
+    async def send(message):
+        captured.append(message)
+        return True
+
+    reply = MCPMessage(
+        task_id="reply", sender=AGENT_MASTER, target="api_gateway",
+        content={"success": True, "data": {}, "type": "result"},
+    )
+    with patch.dict(agent_map, {AGENT_MASTER: object()}), patch(
+        "ecom_agent_matrix.api.dispatch.mcp_bus.send_msg", new=AsyncMock(side_effect=send),
+    ), patch("ecom_agent_matrix.api.dispatch.GatewayResultWaiter.begin"), patch(
+        "ecom_agent_matrix.api.dispatch.GatewayResultWaiter.wait", new=AsyncMock(return_value=reply),
+    ):
+        asyncio.run(dispatch_and_wait(
+            target=AGENT_MASTER, content={"approval_id": "fake"}, priority=1,
+            security=security, approval=grant,
+        ))
+    assert captured[0].approval is grant
+    assert captured[0].content["approval_id"] == "fake"  # payload cannot replace envelope
 
 
 def test_fast_path_child_preserves_security():

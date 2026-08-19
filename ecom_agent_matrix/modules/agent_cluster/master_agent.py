@@ -104,6 +104,7 @@ async def _dispatch_subtask(
     payload: dict,
     priority: int,
     security=None,
+    approval=None,
 ) -> None:
     """限流后向子 Agent 下发单步任务。"""
     sem = _get_subtask_semaphore()
@@ -118,6 +119,7 @@ async def _dispatch_subtask(
             priority=priority,
             content=clean,
             security=security,
+            approval=approval,
         )
         await mcp_bus.send_msg(sub_msg)
         logger.info(
@@ -137,18 +139,23 @@ async def _react_call_one(
     payload: dict,
     priority: int,
     security=None,
+    approval=None,
 ) -> dict:
     """ReAct 单步：下发一个 Agent → 等待回传 → 返回 observation。"""
     correlation_id = str(uuid.uuid4())
     TaskReplyWaiter.begin(correlation_id, 1)
     try:
-        if security is None:
+        if security is None and approval is None:
             await _dispatch_subtask(
                 task_id, correlation_id, target_agent, payload, priority
             )
-        else:
+        elif approval is None:
             await _dispatch_subtask(
                 task_id, correlation_id, target_agent, payload, priority, security
+            )
+        else:
+            await _dispatch_subtask(
+                task_id, correlation_id, target_agent, payload, priority, security, approval
             )
         replies = await TaskReplyWaiter.wait(correlation_id, timeout=float(settings.MCP_TIMEOUT))
     finally:
@@ -463,6 +470,7 @@ async def execute_fast_path(
         payload,
         msg.priority,
         msg.security,
+        msg.approval,
     )
     timed_out = bool(observation.get("timed_out"))
     success = bool(observation.get("success")) and not timed_out

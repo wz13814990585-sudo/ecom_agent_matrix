@@ -17,11 +17,16 @@ from ecom_agent_matrix.api.health import readiness_report
 from ecom_agent_matrix.api.route_customer import router as customer_router
 from ecom_agent_matrix.api.route_task import router as task_router
 from ecom_agent_matrix.api.route_warn import router as warn_router
+from ecom_agent_matrix.api.route_approval import router as approval_router
 from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.core.logging_config import setup_logger
 from ecom_agent_matrix.core.llm import close_http_session
 from ecom_agent_matrix.core.mcp.registry import agent_map, start_all_agents
 from ecom_agent_matrix.core.skill.skill_registry import skill_container
+from ecom_agent_matrix.db.base import (
+    validate_database_runtime_roles,
+    validate_database_security_configuration,
+)
 
 logger = setup_logger("api.main")
 
@@ -32,6 +37,7 @@ _OPENAPI_TAGS = [
     {"name": "tasks", "description": "经 Master ReAct 的通用运营任务"},
     {"name": "customer", "description": "店铺规则 / 售后问答（经 Master → RAG 或查询）"},
     {"name": "warn", "description": "竞品价格查询（经 Master 或直达 Query）"},
+    {"name": "approvals", "description": "高风险写操作人工审批"},
 ]
 
 
@@ -39,6 +45,8 @@ _OPENAPI_TAGS = [
 async def lifespan(_app: FastAPI):
     global _agent_task
     validate_security_configuration(settings)
+    validate_database_security_configuration(settings)
+    await validate_database_runtime_roles(settings)
     logger.info(
         "api_starting",
         extra={
@@ -76,6 +84,7 @@ app = FastAPI(
 app.include_router(task_router)
 app.include_router(customer_router)
 app.include_router(warn_router)
+app.include_router(approval_router)
 
 
 @app.get("/health", tags=["system"], summary="存活探针（不探测外部依赖）")

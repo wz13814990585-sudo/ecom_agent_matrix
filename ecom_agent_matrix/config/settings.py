@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     PG_USER: str = "postgres"
     PG_PWD: str = ""
     PG_DB: str = "ecom_matrix"
+    PG_READ_USER: str = ""
+    PG_READ_PWD: str = ""
+    PG_WRITE_USER: str = ""
+    PG_WRITE_PWD: str = ""
+    DB_READ_STATEMENT_TIMEOUT_MS: int = 5000
+    DB_WRITE_STATEMENT_TIMEOUT_MS: int = 10000
+    DB_READ_MAX_ROWS: int = 500
 
     # 模拟店铺标识（seed / 目录查询默认归属本店货盘）
     DEMO_STORE_ID: str = "demo_store"
@@ -85,7 +92,7 @@ class Settings(BaseSettings):
     RAG_MAX_CONCURRENT: int = 3
     RAG_CACHE_ENABLED: bool = True
     RAG_CACHE_TTL: int = 600
-    RAG_INDEX_VERSION: str = "v1"
+    RAG_INDEX_VERSION: str = "v2"
     RAG_RETRIEVAL_VERSION: str = "hybrid-v2"
 
     # 商品 SKU 检索：字面/trgm → 向量语义兜底
@@ -159,6 +166,7 @@ class Settings(BaseSettings):
     DEV_USER_ID: str = "demo_user"
     DEV_ROLES: str = "admin"
     DEV_SCOPES: str = ""
+    APPROVAL_TTL_SECONDS: int = 600
     API_REQUEST_TIMEOUT: float = 90.0
     API_SENDER: str = "api_gateway"
 

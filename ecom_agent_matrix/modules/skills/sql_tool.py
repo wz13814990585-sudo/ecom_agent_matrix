@@ -9,6 +9,7 @@ from ecom_agent_matrix.core.sql import nl_to_readonly_sql, sanitize_readonly_sql
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
 from ecom_agent_matrix.db.base import AsyncPGClient
+from ecom_agent_matrix.config.settings import settings
 
 class SafeSqlQueryInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -32,6 +33,7 @@ class SafeSqlQueryOutput(BaseModel):
     query_result: list[Any]
     sql: str
     label: str
+    truncated: bool = False
 
 
 @register_skill
@@ -69,13 +71,18 @@ class SafeSqlQueryTool(BaseSkill):
                 return SkillResult(success=False, error_msg=err or "非法 SQL")
 
             query_args = params.get("params", [])
-            query_data = await AsyncPGClient.execute_sql(cleaned, query_args)
+            query_data, truncated = await AsyncPGClient.execute_read_bounded(
+                cleaned,
+                query_args,
+                max_rows=settings.DB_READ_MAX_ROWS,
+            )
             return SkillResult(
                 success=True,
                 data={
                     "query_result": query_data,
                     "sql": cleaned,
                     "label": label or "sql",
+                    "truncated": truncated,
                 },
             )
         except Exception as exc:

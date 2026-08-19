@@ -283,6 +283,7 @@ class MasterPlanExecutor:
                     priority=root_message.priority,
                     content=payload,
                     security=root_message.security,
+                    approval=root_message.approval,
                 )
                 await mcp_bus.send_msg(child)
                 replies = await TaskReplyWaiter.wait(correlation_id, timeout=self.timeout)

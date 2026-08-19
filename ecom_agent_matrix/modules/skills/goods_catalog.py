@@ -12,6 +12,7 @@ from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
 from ecom_agent_matrix.db.base import AsyncPGClient
+from ecom_agent_matrix.core.security import tenant_scope_from_skill_context
 
 # 单次最多返回条数，防止响应过大
 MAX_CATALOG_LIMIT = 500
@@ -143,12 +144,23 @@ class GoodsCatalogTool(BaseSkill):
 
             where = "WHERE 1=1"
             args: list = []
-            scope, store_filter = resolve_catalog_scope(
-                query_text,
-                str(params.get("store_id") or params.get("scope") or "").strip() or None,
-            )
+            db_scope = tenant_scope_from_skill_context()
+            if db_scope.usable:
+                # Trusted identity owns the data boundary. Payload store hints are
+                # retained only for legacy/dev catalog browsing.
+                scope, store_filter = "own", db_scope.store_id
+                where += " AND tenant_id = %s AND store_id = %s"
+                args.extend([db_scope.tenant_id, db_scope.store_id])
+            else:
+                legacy_contract = GoodsCatalogInput.model_validate(params)
+                scope, store_filter = resolve_catalog_scope(
+                    query_text,
+                    str(legacy_contract.store_id or legacy_contract.scope or "").strip() or None,
+                )
             own_name = str(settings.DEMO_STORE_NAME or "我的模拟独立站")
-            if scope == "all":
+            if db_scope.usable:
+                pass
+            elif scope == "all":
                 pass
             elif scope == "external":
                 where += " AND store_id LIKE 'ext_%%'"
@@ -164,7 +176,9 @@ class GoodsCatalogTool(BaseSkill):
                 args.append(category)
 
             count_sql = f"SELECT COUNT(*) FROM {TABLE_GOODS} {where}"
-            count_rows = await AsyncPGClient.execute_sql(count_sql, list(args))
+            count_rows = await AsyncPGClient.execute_read(
+                count_sql, list(args), scope=db_scope
+            )
             total = int(count_rows[0][0] or 0) if count_rows else 0
 
             # 要全部时：一次取 min(total, MAX)，从 offset=0
@@ -181,7 +195,9 @@ class GoodsCatalogTool(BaseSkill):
             LIMIT %s OFFSET %s
             """
             list_args = list(args) + [limit, offset]
-            rows = await AsyncPGClient.execute_sql(list_sql, list_args)
+            rows = await AsyncPGClient.execute_read(
+                list_sql, list_args, scope=db_scope
+            )
             items = [
                 {
                     "sku": r[0],

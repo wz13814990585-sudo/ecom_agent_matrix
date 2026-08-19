@@ -33,6 +33,7 @@ def build_reply(
         priority=request.priority,
         content=body,
         security=request.security,
+        approval=request.approval,
     )
 
 

@@ -55,6 +55,8 @@ class TaobaoApiTool(BaseSkill):
     risk_level = "high"
     timeout_seconds = 30.0
     idempotent = False
+    required_scopes = frozenset({"operations:execute"})
+    approval_required = True
     input_model = TaobaoApiInput
     output_model = TaobaoApiOutput
     skill_name = "taobao_api"

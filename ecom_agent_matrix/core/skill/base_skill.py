@@ -33,6 +33,8 @@ class BaseSkill(ABC):
     output_model: type[BaseModel] | None = None
     deprecated: bool = False
     replacement: str | None = None
+    required_scopes: frozenset[str] = frozenset()
+    approval_required: bool = False
 
     @classmethod
     def spec(cls) -> SkillSpec:
@@ -50,6 +52,8 @@ class BaseSkill(ABC):
             output_model=cls.output_model,
             deprecated=cls.deprecated,
             replacement=cls.replacement,
+            required_scopes=cls.required_scopes,
+            approval_required=cls.approval_required,
         )
 
     @abstractmethod

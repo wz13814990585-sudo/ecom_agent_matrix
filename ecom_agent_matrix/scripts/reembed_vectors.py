@@ -42,21 +42,18 @@ def _chunk_for_lang(row: dict, lang: str) -> str:
 async def sync_and_reembed_goods(batch_size: int) -> int:
     goods_rows = await AsyncPGClient.execute_sql(
         f"""
-        SELECT sku, category, price, title_en, title_zh, title_es, title_fr, desc_multi
+        SELECT tenant_id, store_id, sku, category, price, title_en, title_zh, title_es, title_fr, desc_multi
         FROM {TABLE_GOODS}
         ORDER BY id
         """
     )
     goods = [
         {
-            "sku": r[0],
-            "category": r[1],
-            "price": float(r[2]) if r[2] is not None else None,
-            "title_en": r[3],
-            "title_zh": r[4],
-            "title_es": r[5],
-            "title_fr": r[6],
-            "desc_multi": r[7],
+            "tenant_id": r[0], "store_id": r[1], "sku": r[2],
+            "category": r[3],
+            "price": float(r[4]) if r[4] is not None else None,
+            "title_en": r[5], "title_zh": r[6], "title_es": r[7],
+            "title_fr": r[8], "desc_multi": r[9],
         }
         for r in goods_rows
     ]
@@ -68,7 +65,7 @@ async def sync_and_reembed_goods(batch_size: int) -> int:
     await AsyncPGClient.execute_sql(f"TRUNCATE {TABLE_VECTOR_GOODS} RESTART IDENTITY")
 
     langs = ["en", "zh", "es", "fr"]
-    payloads: list[tuple[str, str, str, dict]] = []
+    payloads: list[tuple[str, str, str, str, str, dict]] = []
     for g in goods:
         for lang in langs:
             chunk = _chunk_for_lang(g, lang)
@@ -79,25 +76,25 @@ async def sync_and_reembed_goods(batch_size: int) -> int:
                 "price": g["price"],
                 "source": "reembed_vectors",
             }
-            payloads.append((g["sku"], lang, chunk, meta))
+            payloads.append((g["tenant_id"], g["store_id"], g["sku"], lang, chunk, meta))
 
     # 若超过 100 条目标，截断到 100（用户之前要求每表 100）
     if len(payloads) > 100:
         # 优先保证 sku 覆盖：轮询语种截断
         payloads = payloads[:100]
 
-    texts = [p[2] for p in payloads]
+    texts = [p[4] for p in payloads]
     print(f"🔄 商品向量：编码 {len(texts)} 条（模型={resolve_embed_model_name()}）...")
     vectors = await get_text_embeddings_batch(texts, batch_size=batch_size)
 
-    for (sku, lang, chunk, meta), vec in zip(payloads, vectors):
+    for (tenant_id, store_id, sku, lang, chunk, meta), vec in zip(payloads, vectors):
         await AsyncPGClient.execute_sql(
             f"""
             INSERT INTO {TABLE_VECTOR_GOODS}
-            (goods_sku, lang, chunk_text, embedding, meta_json)
-            VALUES (%s, %s, %s, %s::vector, %s::jsonb)
+            (tenant_id, store_id, goods_sku, lang, chunk_text, embedding, meta_json)
+            VALUES (%s, %s, %s, %s, %s, %s::vector, %s::jsonb)
             """,
-            [sku, lang, chunk, _vec_literal(vec), json.dumps(meta, ensure_ascii=False)],
+            [tenant_id, store_id, sku, lang, chunk, _vec_literal(vec), json.dumps(meta, ensure_ascii=False)],
         )
     return len(payloads)
 

@@ -18,6 +18,7 @@ from ecom_agent_matrix.modules.rag.lexical import lexical_search
 from ecom_agent_matrix.modules.rag.rate_limiter import get_rag_semaphore
 from ecom_agent_matrix.modules.rag.reranker import rerank_documents_detailed
 from ecom_agent_matrix.modules.rag.schemas import HybridRetrievalResult
+from ecom_agent_matrix.core.security import TenantScope
 
 logger = setup_logger("rag.retriever")
 
@@ -37,7 +38,15 @@ def _query_log_fields(query: str) -> dict[str, int | str]:
     return {"query_hash": digest, "query_length": len(query or "")}
 
 
-def _cache_key(query: str, lang: str, price_max: Optional[float], top_k: int) -> str:
+def _scope_hash(scope: TenantScope | None) -> str:
+    value = f"{scope.tenant_id}:{scope.store_id}" if scope and scope.usable else "legacy"
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:20]
+
+
+def _cache_key(
+    query: str, lang: str, price_max: Optional[float], top_k: int,
+    scope: TenantScope | None = None,
+) -> str:
     payload = json.dumps(
         {
             "index_version": settings.RAG_INDEX_VERSION,
@@ -46,6 +55,7 @@ def _cache_key(query: str, lang: str, price_max: Optional[float], top_k: int) ->
             "lang": lang,
             "price_max": price_max,
             "top_k": top_k,
+            "scope_hash": _scope_hash(scope),
         },
         sort_keys=True,
         ensure_ascii=False,
@@ -53,7 +63,7 @@ def _cache_key(query: str, lang: str, price_max: Optional[float], top_k: int) ->
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     return (
         f"rag:retrieve:{settings.RAG_INDEX_VERSION}:"
-        f"{settings.RAG_RETRIEVAL_VERSION}:{digest}"
+        f"{settings.RAG_RETRIEVAL_VERSION}:{_scope_hash(scope)}:{digest}"
     )
 
 
@@ -95,7 +105,8 @@ async def _save_cache(key: str, docs: list[dict]) -> None:
 
 
 async def vector_search(
-    query_vec: list[float], lang: str, price_max: float = None, top_k: int = 10
+    query_vec: list[float], lang: str, price_max: float = None, top_k: int = 10,
+    *, scope: TenantScope | None = None,
 ) -> List[Dict]:
     """PGVector 向量相似度检索，支持价格筛选。"""
     bounded_k = min(max(int(top_k), 1), 80)
@@ -111,12 +122,15 @@ async def vector_search(
     WHERE (%s = '' OR lang = %s)
     """
     params: list = [vec_lit, lang or "", lang or ""]
+    if scope is not None and scope.usable:
+        base_sql += " AND tenant_id = %s AND store_id = %s"
+        params.extend([scope.tenant_id, scope.store_id])
     if price_max is not None:
         base_sql += " AND (meta_json->>'price')::float <= %s"
         params.append(price_max)
     base_sql += " ORDER BY dist ASC LIMIT %s;"
     params.append(bounded_k)
-    res = await AsyncPGClient.execute_sql(base_sql, params)
+    res = await AsyncPGClient.execute_read(base_sql, params, scope=scope)
     return [
         {
             "sku": row[0],
@@ -155,15 +169,16 @@ async def _vector_channel(
     lang: str,
     price_max: float | None,
     candidate_k: int,
+    scope: TenantScope | None = None,
 ) -> tuple[list[dict], float]:
     started = time.perf_counter()
     try:
         query_vec = await get_text_embedding(query)
     except Exception as exc:
         raise EmbeddingChannelError("embedding unavailable") from exc
-    documents = await vector_search(query_vec, lang, price_max, candidate_k)
+    documents = await vector_search(query_vec, lang, price_max, candidate_k, scope=scope)
     if not documents and lang:
-        documents = await vector_search(query_vec, "", price_max, candidate_k)
+        documents = await vector_search(query_vec, "", price_max, candidate_k, scope=scope)
     return documents, (time.perf_counter() - started) * 1000
 
 
@@ -172,11 +187,12 @@ async def _lexical_channel(
     lang: str,
     price_max: float | None,
     candidate_k: int,
+    scope: TenantScope | None = None,
 ) -> tuple[list[dict], float]:
     started = time.perf_counter()
-    documents = await lexical_search(query, lang, price_max, candidate_k)
+    documents = await lexical_search(query, lang, price_max, candidate_k, scope=scope)
     if not documents and lang:
-        documents = await lexical_search(query, "", price_max, candidate_k)
+        documents = await lexical_search(query, "", price_max, candidate_k, scope=scope)
     return documents, (time.perf_counter() - started) * 1000
 
 
@@ -185,12 +201,23 @@ async def _hybrid_retrieve_detailed_uncached(
     lang: str,
     price_max: float | None = None,
     top_k: int = 8,
+    scope: TenantScope | None = None,
 ) -> HybridRetrievalResult:
     started = time.perf_counter()
     candidate_k = candidate_limit(top_k)
+    vector_call = (
+        _vector_channel(query, lang, price_max, candidate_k)
+        if scope is None
+        else _vector_channel(query, lang, price_max, candidate_k, scope)
+    )
+    lexical_call = (
+        _lexical_channel(query, lang, price_max, candidate_k)
+        if scope is None
+        else _lexical_channel(query, lang, price_max, candidate_k, scope)
+    )
     vector_outcome, lexical_outcome = await asyncio.gather(
-        _vector_channel(query, lang, price_max, candidate_k),
-        _lexical_channel(query, lang, price_max, candidate_k),
+        vector_call,
+        lexical_call,
         return_exceptions=True,
     )
     errors: dict[str, str] = {}
@@ -268,9 +295,10 @@ async def _hybrid_retrieve_detailed_uncached(
 
 
 async def _hybrid_retrieve_uncached(
-    query: str, lang: str, price_max: float = None, top_k: int = 8
+    query: str, lang: str, price_max: float = None, top_k: int = 8,
+    scope: TenantScope | None = None,
 ) -> List[Dict]:
-    result = await _hybrid_retrieve_detailed_uncached(query, lang, price_max, top_k)
+    result = await _hybrid_retrieve_detailed_uncached(query, lang, price_max, top_k, scope)
     if not result.success:
         raise RuntimeError("all retrieval channels failed")
     return result.raw_documents
@@ -283,9 +311,10 @@ async def hybrid_retrieve_detailed(
     top_k: int = 8,
     *,
     task_id: str = "",
+    scope: TenantScope | None = None,
 ) -> HybridRetrievalResult:
     started = time.perf_counter()
-    cache_key = _cache_key(query, lang, price_max, top_k)
+    cache_key = _cache_key(query, lang, price_max, top_k, scope)
     cached_docs = await _load_cache(cache_key)
     if cached_docs is not None:
         elapsed = (time.perf_counter() - started) * 1000
@@ -305,7 +334,7 @@ async def hybrid_retrieve_detailed(
         )
     sem = get_rag_semaphore()
     async with sem:
-        result = await _hybrid_retrieve_detailed_uncached(query, lang, price_max, top_k)
+        result = await _hybrid_retrieve_detailed_uncached(query, lang, price_max, top_k, scope)
     # A degraded result is usable for this request but its channel mode cannot be
     # reconstructed from the legacy list-only cache payload.
     if result.success and not result.degraded:
@@ -334,13 +363,14 @@ async def hybrid_retrieve(
     top_k: int = 8,
     *,
     task_id: str = "",
+    scope: TenantScope | None = None,
 ) -> tuple[list[dict], bool, float]:
     """
     混合检索统一入口。
     返回: (文档列表, 是否命中缓存, 耗时毫秒)
     """
     start = time.perf_counter()
-    cache_key = _cache_key(query, lang, price_max, top_k)
+    cache_key = _cache_key(query, lang, price_max, top_k, scope)
 
     cached_docs = await _load_cache(cache_key)
     if cached_docs is not None:
@@ -361,7 +391,7 @@ async def hybrid_retrieve(
 
     sem = get_rag_semaphore()
     async with sem:
-        docs = await _hybrid_retrieve_uncached(query, lang, price_max, top_k)
+        docs = await _hybrid_retrieve_uncached(query, lang, price_max, top_k, scope)
 
     await _save_cache(cache_key, docs)
     elapsed_ms = (time.perf_counter() - start) * 1000

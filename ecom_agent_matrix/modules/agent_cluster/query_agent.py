@@ -19,6 +19,7 @@ from ecom_agent_matrix.core.tasking import (
     normalize_task_context,
 )
 from ecom_agent_matrix.core.security import SecurityContext
+from ecom_agent_matrix.core.security import ApprovalGrant
 from ecom_agent_matrix.core.security import require_trusted_ingress
 from ecom_agent_matrix.modules.agent_cluster.handlers import (
     handle_data_check,
@@ -102,10 +103,13 @@ async def run_query(
     task: dict | TaskContext,
     *,
     security: SecurityContext | None = None,
+    approval: ApprovalGrant | None = None,
 ) -> tuple[bool, str, dict]:
     """执行一次只读查询（可供单测直接调用）。"""
     ctx = ensure_task_context(task)
-    with skill_execution_context(AGENT_QUERY, task_context=ctx, security=security):
+    with skill_execution_context(
+        AGENT_QUERY, task_context=ctx, security=security, approval=approval
+    ):
         return await _run_query_in_context(ctx)
 
 
@@ -157,7 +161,7 @@ async def query_agent(msg_queue: asyncio.Queue):
                     security=msg.security,
                 )
                 ok, err, data = await asyncio.wait_for(
-                    run_query(ctx, security=msg.security),
+                    run_query(ctx, security=msg.security, approval=msg.approval),
                     timeout=float(settings.QUERY_SKILL_TIMEOUT),
                 )
                 elapsed_ms = (time.perf_counter() - started) * 1000
@@ -196,15 +200,15 @@ async def query_agent(msg_queue: asyncio.Queue):
                     "event": "query_task_failed",
                     "task_id": msg.task_id,
                     "agent": AGENT_QUERY,
-                    "error": str(exc),
+                    "error_type": type(exc).__name__,
                 },
             )
             reply = build_reply(
                 msg,
                 sender=AGENT_QUERY,
                 success=False,
-                error_msg=str(exc),
-                data={},
+                error_msg="data_query 内部执行失败",
+                data={"error_code": "QUERY_EXECUTION_ERROR"},
             )
             await mcp_bus.send_msg(reply)
         finally:

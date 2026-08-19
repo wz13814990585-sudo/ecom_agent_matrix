@@ -9,6 +9,7 @@ from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.core.logging_config import setup_logger
 from ecom_agent_matrix.core.mcp.message import MCPMessage
 from ecom_agent_matrix.db.base import AsyncPGClient
+from ecom_agent_matrix.core.security import tenant_scope_from_security
 
 logger = setup_logger("mcp.bus")
 
@@ -22,19 +23,31 @@ class MCPMessageBus:
         self.retry_times = settings.MCP_RETRY_TIMES
 
     async def _persist_msg(self, msg: MCPMessage) -> None:
-        insert_sql = """
-        INSERT INTO mcp_message_log(task_id, sender_agent, target_agent, priority, msg_content)
-        VALUES (%s, %s, %s, %s, %s::jsonb)
-        """
-        await AsyncPGClient.execute_sql(
-            insert_sql,
-            [
-                msg.task_id,
-                msg.sender,
-                msg.target,
-                msg.priority,
+        scope = tenant_scope_from_security(msg.security)
+        if scope.usable:
+            insert_sql = """
+            INSERT INTO mcp_message_log(
+              tenant_id, store_id, task_id, sender_agent, target_agent, priority, msg_content
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+            """
+            params = [
+                scope.tenant_id, scope.store_id, msg.task_id, msg.sender,
+                msg.target, msg.priority, json.dumps(msg.content, ensure_ascii=False),
+            ]
+        else:
+            insert_sql = """
+            INSERT INTO mcp_message_log(
+              task_id, sender_agent, target_agent, priority, msg_content
+            ) VALUES (%s, %s, %s, %s, %s::jsonb)
+            """
+            params = [
+                msg.task_id, msg.sender, msg.target, msg.priority,
                 json.dumps(msg.content, ensure_ascii=False),
-            ],
+            ]
+        await AsyncPGClient.execute_write(
+            insert_sql,
+            params,
+            scope=scope,
         )
 
     async def _put_audit_buffer(self, msg: MCPMessage) -> None:
@@ -91,7 +104,7 @@ class MCPMessageBus:
                 extra={
                     "event": "mcp_persist_failed",
                     "task_id": msg.task_id,
-                    "error": str(exc),
+                    "error_type": type(exc).__name__,
                 },
             )
 
@@ -123,7 +136,7 @@ class MCPMessageBus:
         except Exception as exc:
             logger.warning(
                 "gateway_submit_failed",
-                extra={"event": "gateway_submit_failed", "task_id": msg.task_id, "error": str(exc)},
+                extra={"event": "gateway_submit_failed", "task_id": msg.task_id, "error_type": type(exc).__name__},
             )
 
         if not delivered:

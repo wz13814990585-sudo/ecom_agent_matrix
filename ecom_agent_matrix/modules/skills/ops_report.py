@@ -66,7 +66,7 @@ async def _sales_stats(days: int) -> dict:
     FROM {TABLE_ORDER}
     WHERE create_time >= NOW() - make_interval(days => %s)
     """
-    rows = await AsyncPGClient.execute_sql(sql, [days])
+    rows = await AsyncPGClient.execute_read(sql, [days])
     r = rows[0] if rows else (0, 0, 0, 0)
     order_cnt, units, gmv, refund_orders = r
     gmv_f = float(gmv or 0)
@@ -90,7 +90,7 @@ async def _top_skus(days: int, top_k: int = 5) -> list[dict]:
     ORDER BY units DESC
     LIMIT %s
     """
-    rows = await AsyncPGClient.execute_sql(sql, [days, top_k])
+    rows = await AsyncPGClient.execute_read(sql, [days, top_k])
     return [
         {"sku": r[0], "units": int(r[1] or 0), "gmv": round(float(r[2] or 0), 2)}
         for r in rows
@@ -106,7 +106,7 @@ async def _stock_stats() -> dict:
       COALESCE(SUM(CASE WHEN stock_num > 0 AND stock_num < 20 THEN 1 ELSE 0 END), 0) AS low_stock_cnt
     FROM {TABLE_GOODS}
     """
-    rows = await AsyncPGClient.execute_sql(sql, [])
+    rows = await AsyncPGClient.execute_read(sql, [])
     r = rows[0] if rows else (0, 0, 0, 0)
     return {
         "sku_count": int(r[0] or 0),
@@ -124,7 +124,7 @@ async def _risk_stats(days: int) -> dict:
     GROUP BY risk_type
     ORDER BY cnt DESC
     """
-    rows = await AsyncPGClient.execute_sql(sql, [days])
+    rows = await AsyncPGClient.execute_read(sql, [days])
     by_type = {str(r[0]): int(r[1] or 0) for r in rows}
     return {"days": days, "total": sum(by_type.values()), "by_type": by_type}
 
@@ -135,7 +135,7 @@ async def _competitor_stats(days: int) -> dict:
     FROM {TABLE_COMPETITOR}
     WHERE crawl_time >= NOW() - make_interval(days => %s)
     """
-    rows = await AsyncPGClient.execute_sql(sql, [days])
+    rows = await AsyncPGClient.execute_read(sql, [days])
     r = rows[0] if rows else (0, 0, 0)
     return {
         "days": days,

@@ -8,6 +8,7 @@ from rank_bm25 import BM25Okapi
 from ecom_agent_matrix.config.constants import TABLE_VECTOR_GOODS
 from ecom_agent_matrix.db.base import AsyncPGClient
 from ecom_agent_matrix.modules.rag.lexicon import tokenize
+from ecom_agent_matrix.core.security import TenantScope
 
 
 def _query_tokens(query: str, limit: int = 8) -> list[str]:
@@ -26,6 +27,8 @@ async def lexical_search(
     lang: str,
     price_max: float | None,
     candidate_k: int,
+    *,
+    scope: TenantScope | None = None,
 ) -> list[dict[str, Any]]:
     """Use parameterized ILIKE to bound candidates, then BM25-rank only that set."""
     bounded_k = min(max(int(candidate_k), 1), 80)
@@ -42,12 +45,15 @@ async def lexical_search(
       AND ({where_expr})
     """
     params: list[Any] = [*patterns, lang or "", lang or "", *patterns]
+    if scope is not None and scope.usable:
+        sql += " AND tenant_id = %s AND store_id = %s"
+        params.extend([scope.tenant_id, scope.store_id])
     if price_max is not None:
         sql += " AND (meta_json->>'price')::float <= %s"
         params.append(price_max)
     sql += " ORDER BY match_count DESC LIMIT %s"
     params.append(bounded_k)
-    rows = await AsyncPGClient.execute_sql(sql, params)
+    rows = await AsyncPGClient.execute_read(sql, params, scope=scope)
     if not rows:
         return []
 

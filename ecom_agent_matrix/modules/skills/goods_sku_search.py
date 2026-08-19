@@ -80,7 +80,7 @@ async def _literal_ilike_only(product_name: str, top_k: int) -> list[dict]:
     ORDER BY stock_num DESC NULLS LAST
     LIMIT %s
     """
-    rows = await AsyncPGClient.execute_sql(
+    rows = await AsyncPGClient.execute_read(
         sql, [pattern, pattern, pattern, pattern, pattern, pattern, top_k]
     )
     return [_row_to_candidate(r, match_mode="literal_ilike") for r in rows]
@@ -125,7 +125,7 @@ async def _literal_trgm_search(product_name: str, top_k: int) -> list[dict]:
         product_name, product_name, product_name, product_name, product_name,
         max(top_k * 3, top_k),
     ]
-    rows = await AsyncPGClient.execute_sql(sql, params)
+    rows = await AsyncPGClient.execute_read(sql, params)
     candidates = []
     for r in rows:
         sim = float(r[6] or 0)
@@ -166,7 +166,7 @@ async def _semantic_vector_search(product_name: str, top_k: int) -> list[dict]:
     ORDER BY dist ASC
     LIMIT %s
     """
-    rows = await AsyncPGClient.execute_sql(sql, [query_vec, query_vec, max_dist, recall_k])
+    rows = await AsyncPGClient.execute_read(sql, [query_vec, query_vec, max_dist, recall_k])
     return [
         _row_to_candidate(r, match_mode="semantic_vector", dist=float(r[6]))
         for r in rows[:top_k]

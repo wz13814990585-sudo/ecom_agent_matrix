@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
 from ecom_agent_matrix.db.base import AsyncPGClient
+from ecom_agent_matrix.core.security import tenant_scope_from_skill_context
 
 
 class PriceMonitorInput(BaseModel):
@@ -96,8 +97,16 @@ class CompetitorPriceMonitor(BaseSkill):
             if thr_err:
                 return SkillResult(success=False, error_msg=thr_err)
 
-            min_sql = "SELECT MIN(compete_price) FROM competitor_price WHERE target_sku = %s;"
-            min_price_row = await AsyncPGClient.execute_sql(min_sql, [target_sku])
+            scope = tenant_scope_from_skill_context()
+            min_sql = "SELECT MIN(compete_price) FROM competitor_price WHERE target_sku = %s"
+            min_params: list = [target_sku]
+            if scope.usable:
+                min_sql += " AND tenant_id = %s AND store_id = %s"
+                min_params.extend([scope.tenant_id, scope.store_id])
+            min_sql += ";"
+            min_price_row = await AsyncPGClient.execute_read(
+                min_sql, min_params, scope=scope
+            )
             raw_min = min_price_row[0][0] if min_price_row and min_price_row[0] else None
             history_min = _as_float(raw_min) if raw_min is not None else compete_price
             price_diff = round(compete_price - history_min, 2)
@@ -139,6 +148,7 @@ class RecordCompetitorPrice(BaseSkill):
     risk_level = "medium"
     timeout_seconds = 10.0
     idempotent = False
+    required_scopes = frozenset({"operations:execute"})
     input_model = RecordCompetitorPriceInput
     output_model = RecordCompetitorPriceOutput
     skill_name = "record_competitor_price"
@@ -152,13 +162,26 @@ class RecordCompetitorPrice(BaseSkill):
             if not target_sku or not competitor:
                 return SkillResult(success=False, error_msg="target_sku / competitor 不能为空")
 
-            insert_sql = """
-            INSERT INTO competitor_price(target_sku, competitor_name, compete_price)
-            VALUES (%s, %s, %s) RETURNING id;
-            """
-            rows = await AsyncPGClient.execute_sql(
+            scope = tenant_scope_from_skill_context()
+            if scope.usable:
+                insert_sql = """
+                INSERT INTO competitor_price(
+                  tenant_id, store_id, target_sku, competitor_name, compete_price
+                ) VALUES (%s, %s, %s, %s, %s) RETURNING id;
+                """
+                insert_params = [
+                    scope.tenant_id, scope.store_id, target_sku, competitor, compete_price
+                ]
+            else:
+                insert_sql = """
+                INSERT INTO competitor_price(target_sku, competitor_name, compete_price)
+                VALUES (%s, %s, %s) RETURNING id;
+                """
+                insert_params = [target_sku, competitor, compete_price]
+            rows = await AsyncPGClient.execute_write(
                 insert_sql,
-                [target_sku, competitor, compete_price],
+                insert_params,
+                scope=scope,
             )
             record_id = rows[0][0] if rows and rows[0] else None
             return SkillResult(

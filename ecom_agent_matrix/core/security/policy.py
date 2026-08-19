@@ -11,15 +11,17 @@ KNOWLEDGE_READ = "knowledge:read"
 COMMERCE_READ = "commerce:read"
 OPERATIONS_EXECUTE = "operations:execute"
 RISK_WRITE = "risk:write"
+RISK_APPROVE = "risk:approve"
 SYSTEM_READ = "system:read"
 
 ALL_SCOPES = frozenset(
-    {KNOWLEDGE_READ, COMMERCE_READ, OPERATIONS_EXECUTE, RISK_WRITE, SYSTEM_READ}
+    {KNOWLEDGE_READ, COMMERCE_READ, OPERATIONS_EXECUTE, RISK_WRITE, RISK_APPROVE, SYSTEM_READ}
 )
 ROLE_SCOPES: dict[str, frozenset[str]] = {
     "viewer": frozenset({KNOWLEDGE_READ, COMMERCE_READ}),
     "operator": frozenset({KNOWLEDGE_READ, COMMERCE_READ, OPERATIONS_EXECUTE}),
     "risk_operator": frozenset({COMMERCE_READ, RISK_WRITE}),
+    "risk_approver": frozenset({COMMERCE_READ, RISK_APPROVE}),
     "admin": ALL_SCOPES,
 }
 

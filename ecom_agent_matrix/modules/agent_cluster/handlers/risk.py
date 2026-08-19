@@ -24,11 +24,11 @@ async def run_risk_workflow(task: dict | TaskContext) -> WorkflowResult:
     ctx = ensure_task_context(task)
     try:
         request = parse_risk_request(ctx)
-    except (ValidationError, TypeError, ValueError) as exc:
+    except (ValidationError, TypeError, ValueError):
         return WorkflowResult(
             success=False,
             error_code=INVALID_REQUEST,
-            error_msg=f"风控请求参数不合法：{exc}",
+            error_msg="风控请求参数不合法",
             data={"exec_kind": "risk"},
             metadata=_metadata(started),
         )
@@ -56,6 +56,8 @@ async def run_risk_workflow(task: dict | TaskContext) -> WorkflowResult:
     partial = False
     record_error = ""
     record_error_code = ""
+    approval_required = False
+    approval_id = ""
     if assessment.get("is_risk"):
         record_result = await exec_skill(
             "record_order_risk",
@@ -75,6 +77,8 @@ async def run_risk_workflow(task: dict | TaskContext) -> WorkflowResult:
         partial = not record_result.success
         record_error = record_result.error_msg
         record_error_code = record_result.error_code
+        approval_required = record_result.error_code == "APPROVAL_REQUIRED"
+        approval_id = str((record_result.data or {}).get("approval_id") or "")
 
     return WorkflowResult(
         success=True,
@@ -91,6 +95,8 @@ async def run_risk_workflow(task: dict | TaskContext) -> WorkflowResult:
                 "data": risk_result.data or {},
             },
             "record": record_data,
+            "approval_required": approval_required,
+            "approval_id": approval_id,
         },
         metadata=_metadata(started, skill_error_code=record_error_code),
     )

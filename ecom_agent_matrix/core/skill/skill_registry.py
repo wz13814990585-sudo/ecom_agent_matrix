@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Dict, Iterator, Type
 
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
-from ecom_agent_matrix.core.security import SecurityContext
+from ecom_agent_matrix.core.security import ApprovalGrant, SecurityContext
 
 if TYPE_CHECKING:
     from ecom_agent_matrix.core.tasking import TaskContext
@@ -27,6 +27,7 @@ class SkillExecutionContext:
     roles: frozenset[str] = frozenset()
     scopes: frozenset[str] = frozenset()
     identity_trusted: bool = False
+    approval: ApprovalGrant | None = None
 
 
 _execution_context: ContextVar[SkillExecutionContext | None] = ContextVar(
@@ -42,6 +43,7 @@ def skill_execution_context(
     task_context: "TaskContext | None" = None,
     security: SecurityContext | None = None,
     task_id: str = "",
+    approval: ApprovalGrant | None = None,
 ) -> Iterator[SkillExecutionContext]:
     """为当前异步调用链绑定 Agent 身份，嵌套 Skill 自动继承。"""
     context = SkillExecutionContext(
@@ -55,6 +57,7 @@ def skill_execution_context(
         identity_trusted=bool(security and security.authenticated) or bool(
             task_context and task_context.identity_trusted
         ),
+        approval=approval,
     )
     token = _execution_context.set(context)
     try:

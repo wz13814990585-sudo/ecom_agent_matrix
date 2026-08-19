@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
 from ecom_agent_matrix.db.base import AsyncPGClient
+from ecom_agent_matrix.core.security import tenant_scope_from_skill_context
 
 
 class EvaluateOrderRiskInput(BaseModel):
@@ -51,12 +52,26 @@ def _evaluate(total_amount: float, buy_count: int) -> tuple[list[str], str]:
 
 
 async def _insert_risk(order_no: str, risk_type: str, risk_desc: str) -> int | None:
-    rows = await AsyncPGClient.execute_sql(
+    scope = tenant_scope_from_skill_context()
+    if not scope.usable:
+        # Compatibility for legacy/dev direct calls. Trusted production execution
+        # always takes the physical tenant/store path below.
+        rows = await AsyncPGClient.execute_write(
+            """
+            INSERT INTO risk_record(order_no, risk_type, risk_desc)
+            VALUES (%s, %s, %s) RETURNING id;
+            """,
+            [order_no, risk_type, risk_desc],
+            scope=scope,
+        )
+        return rows[0][0] if rows and rows[0] else None
+    rows = await AsyncPGClient.execute_write(
         """
-        INSERT INTO risk_record(order_no, risk_type, risk_desc)
-        VALUES (%s, %s, %s) RETURNING id;
+        INSERT INTO risk_record(tenant_id, store_id, order_no, risk_type, risk_desc)
+        VALUES (%s, %s, %s, %s, %s) RETURNING id;
         """,
-        [order_no, risk_type, risk_desc],
+        [scope.tenant_id, scope.store_id, order_no, risk_type, risk_desc],
+        scope=scope,
     )
     return rows[0][0] if rows and rows[0] else None
 
@@ -88,6 +103,8 @@ class RecordOrderRiskTool(BaseSkill):
     risk_level = "high"
     timeout_seconds = 10.0
     idempotent = False
+    required_scopes = frozenset({"risk:write"})
+    approval_required = True
     input_model = RecordOrderRiskInput
     output_model = RecordOrderRiskOutput
     skill_name = "record_order_risk"
@@ -109,6 +126,8 @@ class OrderRiskControlTool(BaseSkill):
     risk_level = "high"
     timeout_seconds = 15.0
     idempotent = False
+    required_scopes = frozenset({"risk:write"})
+    approval_required = True
     input_model = EvaluateOrderRiskInput
     output_model = EvaluateOrderRiskOutput
     deprecated = True

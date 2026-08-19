@@ -13,8 +13,12 @@ async def check_postgres() -> dict[str, Any]:
     try:
         from ecom_agent_matrix.db.base import AsyncPGClient
 
-        rows = await AsyncPGClient.execute_sql("SELECT 1 AS ok")
-        ok = bool(rows and rows[0] and rows[0][0] == 1)
+        read_rows = await AsyncPGClient.execute_health("read")
+        write_rows = await AsyncPGClient.execute_health("write")
+        ok = bool(
+            read_rows and read_rows[0] and read_rows[0][0] == 1
+            and write_rows and write_rows[0] and write_rows[0][0] == 1
+        )
         return {
             "ok": ok,
             "host": settings.PG_HOST,
@@ -24,14 +28,14 @@ async def check_postgres() -> dict[str, Any]:
     except Exception as exc:
         logger.warning(
             "health_pg_failed",
-            extra={"event": "health_pg_failed", "error": str(exc)},
+            extra={"event": "health_pg_failed", "error_type": type(exc).__name__},
         )
         return {
             "ok": False,
             "host": settings.PG_HOST,
             "port": settings.PG_PORT,
             "db": settings.PG_DB,
-            "error": str(exc),
+            "error": "Postgres unavailable",
         }
 
 
@@ -50,14 +54,14 @@ async def check_redis() -> dict[str, Any]:
     except Exception as exc:
         logger.warning(
             "health_redis_failed",
-            extra={"event": "health_redis_failed", "error": str(exc)},
+            extra={"event": "health_redis_failed", "error_type": type(exc).__name__},
         )
         return {
             "ok": False,
             "host": settings.REDIS_HOST,
             "port": settings.REDIS_PORT,
             "db": settings.REDIS_DB,
-            "error": str(exc),
+            "error": "Redis unavailable",
         }
 
 

@@ -21,6 +21,7 @@ from ecom_agent_matrix.modules.rag.schemas import (
     RAGRetrievalResult,
 )
 from ecom_agent_matrix.modules.utils.llm_explain import llm_explain
+from ecom_agent_matrix.core.security import TenantScope, require_tenant_scope
 
 logger = setup_logger("rag.service")
 INVALID_REQUEST = "INVALID_REQUEST"
@@ -45,7 +46,9 @@ def _no_knowledge_answer(request: RAGRequest) -> str:
 
 
 class RAGService:
-    async def retrieve(self, request: RAGRequest | dict[str, Any]) -> RAGRetrievalResult:
+    async def retrieve(
+        self, request: RAGRequest | dict[str, Any], *, scope: TenantScope | None = None
+    ) -> RAGRetrievalResult:
         started = time.perf_counter()
         try:
             typed = request if isinstance(request, RAGRequest) else RAGRequest.model_validate(request)
@@ -58,12 +61,17 @@ class RAGService:
                 latency_ms=round((time.perf_counter() - started) * 1000, 2),
             )
         try:
+            require_tenant_scope(
+                scope or TenantScope(),
+                production=str(settings.APP_ENV).lower() == "production",
+            )
             detailed = await hybrid_retrieve_detailed(
                 typed.query,
                 typed.lang,
                 typed.price_max,
                 typed.top_k,
                 task_id=typed.task_id,
+                scope=scope,
             )
             if not detailed.success:
                 return RAGRetrievalResult(
@@ -113,7 +121,9 @@ class RAGService:
                 latency_ms=latency_ms,
             )
 
-    async def answer(self, request: RAGRequest | dict[str, Any]) -> RAGAnswerResult:
+    async def answer(
+        self, request: RAGRequest | dict[str, Any], *, scope: TenantScope | None = None
+    ) -> RAGAnswerResult:
         started = time.perf_counter()
         try:
             typed = request if isinstance(request, RAGRequest) else RAGRequest.model_validate(request)
@@ -129,7 +139,7 @@ class RAGService:
                 error_code=INVALID_REQUEST,
                 error_msg="Invalid RAG request",
             )
-        retrieval = await self.retrieve(typed)
+        retrieval = await self.retrieve(typed, scope=scope)
         if not retrieval.success:
             return RAGAnswerResult(
                 success=False,

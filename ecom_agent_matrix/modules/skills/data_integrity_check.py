@@ -51,7 +51,7 @@ async def _check_goods(sku: str | None = None, limit: int = 50) -> list[dict]:
     LIMIT %s
     """
     params.append(limit)
-    rows = await AsyncPGClient.execute_sql(sql, params)
+    rows = await AsyncPGClient.execute_read(sql, params)
     for r in rows:
         g_sku, price, stock, title_zh, title_en, category = r
         problems = []
@@ -96,7 +96,7 @@ async def _check_orders(order_no: str | None = None, sku: str | None = None, lim
     LIMIT %s
     """
     params.append(limit)
-    rows = await AsyncPGClient.execute_sql(sql, params)
+    rows = await AsyncPGClient.execute_read(sql, params)
     for r in rows:
         ono, o_sku, buy_num, total_amount, refund_flag, goods_sku, goods_price = r
         problems = []

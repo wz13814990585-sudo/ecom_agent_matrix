@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from ecom_agent_matrix.api.auth import get_current_security_context
+from ecom_agent_matrix.api.auth import get_current_approval_grant, get_current_security_context
 from ecom_agent_matrix.api.dispatch import dispatch_to_master
 from ecom_agent_matrix.api.schemas import ApiResult, CustomerChatRequest
 from ecom_agent_matrix.config.constants import MSG_PRIORITY_CUSTOMER
 from ecom_agent_matrix.core.security import SecurityContext, authorize_task
+from ecom_agent_matrix.core.security import ApprovalGrant
 from ecom_agent_matrix.core.security.errors import AuthorizationError
 from fastapi import HTTPException, status
 
@@ -21,6 +22,7 @@ router = APIRouter(
 async def customer_chat(
     body: CustomerChatRequest,
     security: SecurityContext = Depends(get_current_security_context),
+    approval: ApprovalGrant | None = Depends(get_current_approval_grant),
 ) -> ApiResult:
     content: dict = {
         "query": body.query,
@@ -48,5 +50,6 @@ async def customer_chat(
         priority=MSG_PRIORITY_CUSTOMER,
         timeout=body.timeout,
         security=security,
+        approval=approval,
     )
     return ApiResult(**result)

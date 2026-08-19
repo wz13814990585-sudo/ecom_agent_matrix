@@ -54,7 +54,7 @@ class StockPredictTool(BaseSkill):
             FROM ecom_order
             WHERE sku = %s AND create_time >= NOW() - INTERVAL '30 days' AND refund_flag = false;
             """
-            stat_res = await AsyncPGClient.execute_sql(stat_sql, [sku])
+            stat_res = await AsyncPGClient.execute_read(stat_sql, [sku])
             total_30d_sales = float(stat_res[0][0] or 0)
             daily_avg = total_30d_sales / 30
             safety_stock_rate = 1.2

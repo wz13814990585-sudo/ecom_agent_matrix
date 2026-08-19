@@ -16,6 +16,7 @@ from ecom_agent_matrix.core.mcp.reply import build_rag_reply
 from ecom_agent_matrix.modules.rag.schemas import RAGRequest
 from ecom_agent_matrix.modules.rag.service import rag_service
 from ecom_agent_matrix.core.security import require_trusted_ingress
+from ecom_agent_matrix.core.security import tenant_scope_from_security
 
 logger = setup_logger("rag.agent")
 
@@ -47,7 +48,9 @@ async def rag_agent(msg_queue: asyncio.Queue):
                 top_k=payload.get("top_k", 8),
                 task_id=msg.task_id,
             )
-            result = await rag_service.answer(request)
+            result = await rag_service.answer(
+                request, scope=tenant_scope_from_security(msg.security)
+            )
             reply = build_rag_reply(
                 msg,
                 query=request.query,

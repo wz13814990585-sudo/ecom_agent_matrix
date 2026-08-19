@@ -1,0 +1,13 @@
+-- Run as a migration/admin role. Replace role identifiers during deployment.
+-- Never place role passwords in this file or source control.
+GRANT CONNECT ON DATABASE ecom_matrix TO app_read_role, app_write_role;
+GRANT USAGE ON SCHEMA public TO app_read_role, app_write_role;
+GRANT SELECT ON ecom_goods, ecom_order, competitor_price, risk_record,
+  vector_goods_kb, agent_long_memory, finetune_dataset TO app_read_role;
+GRANT SELECT ON competitor_price, risk_record, agent_long_memory,
+  security_approval TO app_write_role;
+GRANT INSERT, UPDATE ON competitor_price, risk_record, agent_long_memory,
+  security_approval TO app_write_role;
+GRANT INSERT ON security_audit_log, mcp_message_log, finetune_dataset TO app_write_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_write_role;
+-- Runtime roles must be NOSUPERUSER NOBYPASSRLS. Apply with deployment tooling.

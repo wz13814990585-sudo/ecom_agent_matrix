@@ -18,6 +18,7 @@ from ecom_agent_matrix.core.tasking import (
     normalize_task_context,
 )
 from ecom_agent_matrix.core.security import SecurityContext
+from ecom_agent_matrix.core.security import ApprovalGrant
 from ecom_agent_matrix.core.security import require_trusted_ingress
 from ecom_agent_matrix.modules.agent_cluster.handlers import (
     handle_ad,
@@ -83,11 +84,14 @@ async def run_exec(
     *,
     task_id: str = "",
     security: SecurityContext | None = None,
+    approval: ApprovalGrant | None = None,
 ) -> tuple[bool, str, dict]:
     ctx = task if isinstance(task, TaskContext) else ensure_task_context(task)
     if task_id and not isinstance(task, TaskContext):
         ctx = ctx.with_updates(task_id=task_id.strip())
-    with skill_execution_context(AGENT_EXEC, task_context=ctx, security=security):
+    with skill_execution_context(
+        AGENT_EXEC, task_context=ctx, security=security, approval=approval
+    ):
         kind = infer_exec_kind(ctx)
         if kind == "ad":
             return await handle_ad(ctx)
@@ -123,7 +127,7 @@ async def exec_agent(msg_queue: asyncio.Queue):
                     security=msg.security,
                 )
                 ok, err, data = await asyncio.wait_for(
-                    run_exec(ctx, security=msg.security),
+                    run_exec(ctx, security=msg.security, approval=msg.approval),
                     timeout=float(settings.EXEC_SKILL_TIMEOUT),
                 )
                 elapsed_ms = (time.perf_counter() - started) * 1000
@@ -162,15 +166,15 @@ async def exec_agent(msg_queue: asyncio.Queue):
                     "event": "exec_task_failed",
                     "task_id": msg.task_id,
                     "agent": AGENT_EXEC,
-                    "error": str(exc),
+                    "error_type": type(exc).__name__,
                 },
             )
             reply = build_reply(
                 msg,
                 sender=AGENT_EXEC,
                 success=False,
-                error_msg=str(exc),
-                data={},
+                error_msg="biz_exec 内部执行失败",
+                data={"error_code": "EXECUTION_ERROR"},
             )
             await mcp_bus.send_msg(reply)
         finally:

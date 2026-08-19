@@ -14,6 +14,7 @@ from ecom_agent_matrix.modules.rag.formatter import format_rag_context, normaliz
 from ecom_agent_matrix.modules.rag.policy import should_retrieve_knowledge
 from ecom_agent_matrix.modules.rag.schemas import RAGRequest
 from ecom_agent_matrix.modules.rag.service import rag_service
+from ecom_agent_matrix.core.security import tenant_scope_from_task_context
 
 
 def _metadata(started: float, **extra) -> dict:
@@ -154,7 +155,8 @@ async def run_crm_workflow(
                 lang=request.lang,
                 top_k=5,
                 task_id=request.task_id,
-            )
+            ),
+            scope=tenant_scope_from_task_context(ctx),
         )
         if retrieval.success:
             knowledge_context = format_rag_context(retrieval.documents)

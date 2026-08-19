@@ -6,10 +6,12 @@ from collections.abc import Iterable
 from typing import Any
 
 import jwt
-from fastapi import Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 
 from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.core.security import SecurityConfigurationError, SecurityContext
+from ecom_agent_matrix.core.security import ApprovalGrant
+from ecom_agent_matrix.core.security.approval import approval_service
 
 
 def _items(value: Any) -> frozenset[str]:
@@ -141,10 +143,26 @@ async def require_api_key(
     return authenticate_api_key(x_api_key)
 
 
+async def get_current_approval_grant(
+    x_approval_id: str | None = Header(default=None, alias="X-Approval-Id"),
+    security: SecurityContext = Depends(get_current_security_context),
+) -> ApprovalGrant | None:
+    if not x_approval_id:
+        return None
+    try:
+        return await approval_service.get_grant(x_approval_id.strip(), security)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid or unavailable approval",
+        ) from None
+
+
 __all__ = [
     "authenticate_api_key",
     "authenticate_jwt",
     "get_current_security_context",
     "require_api_key",
     "validate_security_configuration",
+    "get_current_approval_grant",
 ]

@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from ecom_agent_matrix.api.auth import get_current_security_context
+from ecom_agent_matrix.api.auth import get_current_approval_grant, get_current_security_context
 from ecom_agent_matrix.api.dispatch import dispatch_and_wait, dispatch_to_master
 from ecom_agent_matrix.api.schemas import ApiResult, CompetitorWarnRequest
 from ecom_agent_matrix.config.constants import AGENT_QUERY, MSG_PRIORITY_RISK
 from ecom_agent_matrix.core.security import SecurityContext, authorize_task
+from ecom_agent_matrix.core.security import ApprovalGrant
 from ecom_agent_matrix.core.security.errors import AuthorizationError
 
 router = APIRouter(prefix="/api/v1/warn", tags=["warn"])
@@ -17,6 +18,7 @@ router = APIRouter(prefix="/api/v1/warn", tags=["warn"])
 async def competitor_warn(
     body: CompetitorWarnRequest,
     security: SecurityContext = Depends(get_current_security_context),
+    approval: ApprovalGrant | None = Depends(get_current_approval_grant),
 ) -> ApiResult:
     try:
         authorize_task(security, "competitor_watch")
@@ -47,6 +49,7 @@ async def competitor_warn(
             priority=MSG_PRIORITY_RISK,
             timeout=body.timeout,
             security=security,
+            approval=approval,
         )
     else:
         if not content.get("sku") or not content.get("competitor"):
@@ -60,5 +63,6 @@ async def competitor_warn(
             priority=MSG_PRIORITY_RISK,
             timeout=body.timeout,
             security=security,
+            approval=approval,
         )
     return ApiResult(**result)

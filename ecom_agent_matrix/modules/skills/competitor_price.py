@@ -106,7 +106,7 @@ async def _latest_db_price(sku: str, competitor: str) -> float | None:
     ORDER BY crawl_time DESC NULLS LAST, id DESC
     LIMIT 1
     """
-    rows = await AsyncPGClient.execute_sql(sql, [sku, competitor])
+    rows = await AsyncPGClient.execute_read(sql, [sku, competitor])
     if rows and rows[0][0] is not None:
         return float(rows[0][0])
     return None
@@ -114,7 +114,7 @@ async def _latest_db_price(sku: str, competitor: str) -> float | None:
 
 async def _our_goods_price(sku: str) -> float | None:
     sql = f"SELECT price FROM {TABLE_GOODS} WHERE sku = %s LIMIT 1"
-    rows = await AsyncPGClient.execute_sql(sql, [sku])
+    rows = await AsyncPGClient.execute_read(sql, [sku])
     if rows and rows[0][0] is not None:
         return float(rows[0][0])
     return None

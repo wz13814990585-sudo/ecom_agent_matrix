@@ -89,3 +89,58 @@ def test_risk_legacy_tuple_compatibility():
             return await handle_risk({"order_no": "ORD-1", "total_amount": 10, "buy_count": 1})
     ok, _, data = asyncio.run(scenario())
     assert ok and data["_workflow"]["metadata"]["workflow"] == "risk"
+
+
+def test_risky_order_surfaces_approval_and_does_not_retry_write():
+    evaluation = SkillResult(
+        success=True,
+        data={"is_risk": True, "risk_tags": ["大额订单"], "risk_detail": "大额订单"},
+    )
+    pending = SkillResult(
+        success=False,
+        error_code="APPROVAL_REQUIRED",
+        error_msg="approval required",
+        data={"approval_required": True, "approval_id": "approval-1"},
+    )
+
+    async def scenario():
+        execute = AsyncMock(side_effect=[evaluation, pending])
+        with patch(
+            "ecom_agent_matrix.modules.agent_cluster.handlers.risk.exec_skill", new=execute
+        ):
+            result = await run_risk_workflow(
+                {"order_no": "ORD-1", "total_amount": 501, "buy_count": 1}
+            )
+        return result, execute
+
+    result, execute = asyncio.run(scenario())
+    assert result.success and result.partial_success
+    assert result.data["approval_required"] is True
+    assert result.data["approval_id"] == "approval-1"
+    assert execute.await_count == 2
+
+
+def test_approved_risky_order_records_once_and_write_failure_is_not_retried():
+    evaluation = SkillResult(
+        success=True,
+        data={"is_risk": True, "risk_tags": ["大额订单"], "risk_detail": "大额订单"},
+    )
+
+    async def run(record):
+        execute = AsyncMock(side_effect=[evaluation, record])
+        with patch(
+            "ecom_agent_matrix.modules.agent_cluster.handlers.risk.exec_skill", new=execute
+        ):
+            result = await run_risk_workflow(
+                {"order_no": "ORD-1", "total_amount": 501, "buy_count": 1}
+            )
+        return result, execute
+
+    success, success_exec = asyncio.run(run(SkillResult(success=True, data={"record_id": 7})))
+    failure, failure_exec = asyncio.run(run(SkillResult(
+        success=False, error_code="EXECUTION_ERROR", error_msg="write failed"
+    )))
+    assert success.success and not success.partial_success
+    assert success.data["record"]["data"]["record_id"] == 7
+    assert failure.success and failure.partial_success
+    assert success_exec.await_count == 2 and failure_exec.await_count == 2
