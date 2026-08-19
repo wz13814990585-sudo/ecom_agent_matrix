@@ -63,6 +63,12 @@ async def rag_agent(msg_queue: asyncio.Queue):
                 citations=[citation.model_dump() for citation in result.citations],
                 grounded=result.grounded,
                 retrieval_version=settings.RAG_RETRIEVAL_VERSION,
+                invalid_citation_ids=result.invalid_citation_ids,
+                citation_status=result.citation_status,
+                retrieval_mode=result.retrieval_mode,
+                degraded=result.degraded,
+                channel_errors=result.channel_errors,
+                candidate_counts=result.candidate_counts,
             )
             await mcp_bus.send_msg(reply)
             logger.info(

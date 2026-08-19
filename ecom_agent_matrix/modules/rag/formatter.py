@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any
 
 from ecom_agent_matrix.modules.rag.schemas import RAGCitation, RAGDocument
@@ -118,3 +119,20 @@ def format_rag_docs(docs: list[dict[str, Any]] | list[RAGDocument], limit: int =
         else normalize_documents(docs)  # type: ignore[arg-type]
     )
     return format_rag_context(documents, limit=limit)  # type: ignore[arg-type]
+
+
+def validate_answer_citations(
+    answer: str,
+    citations: list[RAGCitation],
+) -> tuple[str, list[str], list[str]]:
+    known = {citation.citation_id for citation in citations}
+    seen = re.findall(r"\[(S\d+)\]", answer or "")
+    valid = list(dict.fromkeys(citation_id for citation_id in seen if citation_id in known))
+    invalid = list(dict.fromkeys(citation_id for citation_id in seen if citation_id not in known))
+    cleaned = re.sub(
+        r"\[(S\d+)\]",
+        lambda match: match.group(0) if match.group(1) in known else "",
+        answer or "",
+    )
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+    return cleaned, valid, invalid

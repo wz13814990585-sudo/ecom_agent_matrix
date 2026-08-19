@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from pydantic import ValidationError
 
-from ecom_agent_matrix.modules.rag.schemas import RAGDocument, RAGRequest
+from ecom_agent_matrix.modules.rag.schemas import HybridRetrievalResult, RAGDocument, RAGRequest
 from ecom_agent_matrix.modules.rag.service import RAGService
 
 
@@ -32,8 +32,11 @@ def test_retrieve_returns_typed_documents_and_citations():
             }
         ]
         with patch(
-            "ecom_agent_matrix.modules.rag.service.hybrid_retrieve",
-            new=AsyncMock(return_value=(raw, True, 12.5)),
+            "ecom_agent_matrix.modules.rag.service.hybrid_retrieve_detailed",
+            new=AsyncMock(return_value=HybridRetrievalResult(
+                success=True, raw_documents=raw, mode="hybrid", cached=True,
+                latency_ms=12.5,
+            )),
         ):
             return await RAGService().retrieve(RAGRequest(query="refund", task_id="T1"))
 
@@ -48,7 +51,7 @@ def test_retrieve_returns_typed_documents_and_citations():
 def test_retrieval_error_is_safe_and_structured():
     async def scenario():
         with patch(
-            "ecom_agent_matrix.modules.rag.service.hybrid_retrieve",
+            "ecom_agent_matrix.modules.rag.service.hybrid_retrieve_detailed",
             new=AsyncMock(
                 side_effect=RuntimeError("postgres://user:password@secret-host/private.sql")
             ),

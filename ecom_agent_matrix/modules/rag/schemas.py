@@ -1,7 +1,7 @@
 """RAG service typed contracts。"""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -60,6 +60,11 @@ class RAGRetrievalResult(BaseModel):
     recall_count: int = Field(default=0, ge=0)
     latency_ms: float = Field(default=0, ge=0)
     retrieval_version: str
+    retrieval_mode: Literal["hybrid", "vector_only", "lexical_only", "none"] = "none"
+    degraded: bool = False
+    channel_errors: dict[str, str] = Field(default_factory=dict)
+    candidate_counts: dict[str, int] = Field(default_factory=dict)
+    diagnostics: dict[str, float | str] = Field(default_factory=dict)
     error_code: str = ""
     error_msg: str = ""
 
@@ -76,5 +81,28 @@ class RAGAnswerResult(BaseModel):
     cached: bool
     retrieval_latency_ms: float = Field(default=0, ge=0)
     total_latency_ms: float = Field(default=0, ge=0)
+    invalid_citation_ids: list[str] = Field(default_factory=list)
+    citation_status: Literal["valid", "missing", "invalid", "none"] = "none"
+    retrieval_mode: Literal["hybrid", "vector_only", "lexical_only", "none"] = "none"
+    degraded: bool = False
+    channel_errors: dict[str, str] = Field(default_factory=dict)
+    candidate_counts: dict[str, int] = Field(default_factory=dict)
     error_code: str = ""
     error_msg: str = ""
+
+
+class HybridRetrievalResult(BaseModel):
+    """Retriever internal detailed result; raw documents have no citation rank yet."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    success: bool
+    raw_documents: list[dict[str, Any]] = Field(default_factory=list)
+    mode: Literal["hybrid", "vector_only", "lexical_only", "none"]
+    degraded: bool = False
+    channel_errors: dict[str, str] = Field(default_factory=dict)
+    candidate_counts: dict[str, int] = Field(default_factory=dict)
+    diagnostics: dict[str, float | str] = Field(default_factory=dict)
+    cached: bool = False
+    latency_ms: float = Field(default=0, ge=0)
+    error_code: str = ""

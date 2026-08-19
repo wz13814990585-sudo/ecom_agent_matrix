@@ -1,0 +1,10 @@
+[
+  {
+    "query": "What is the refund policy?",
+    "relevant_source_ids": ["policy:refund:en"]
+  },
+  {
+    "query": "退款规则是什么？",
+    "relevant_source_ids": ["policy:refund:zh"]
+  }
+]

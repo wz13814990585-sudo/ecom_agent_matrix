@@ -53,6 +53,12 @@ def build_rag_reply(
     grounded: bool = False,
     retrieval_version: str = "",
     error_code: str = "",
+    invalid_citation_ids: list[str] | None = None,
+    citation_status: str = "none",
+    retrieval_mode: str = "none",
+    degraded: bool = False,
+    channel_errors: dict[str, str] | None = None,
+    candidate_counts: dict[str, int] | None = None,
 ) -> MCPMessage:
     """RAG 检索 + 可选生成答复回传。"""
     from ecom_agent_matrix.config.constants import AGENT_RAG
@@ -77,5 +83,11 @@ def build_rag_reply(
             "grounded": grounded,
             "retrieval_version": retrieval_version,
             "error_code": error_code,
+            "invalid_citation_ids": invalid_citation_ids or [],
+            "citation_status": citation_status,
+            "retrieval_mode": retrieval_mode,
+            "degraded": degraded,
+            "channel_errors": channel_errors or {},
+            "candidate_counts": candidate_counts or {},
         },
     )

@@ -1,7 +1,6 @@
 """MCP-independent typed RAG retrieval and answer service。"""
 from __future__ import annotations
 
-import re
 import time
 from typing import Any
 
@@ -13,8 +12,9 @@ from ecom_agent_matrix.modules.rag.formatter import (
     citations_for_documents,
     format_rag_context,
     normalize_documents,
+    validate_answer_citations,
 )
-from ecom_agent_matrix.modules.rag.retriever import hybrid_retrieve
+from ecom_agent_matrix.modules.rag.retriever import hybrid_retrieve_detailed
 from ecom_agent_matrix.modules.rag.schemas import (
     RAGAnswerResult,
     RAGRequest,
@@ -27,7 +27,6 @@ INVALID_REQUEST = "INVALID_REQUEST"
 EMBEDDING_ERROR = "EMBEDDING_ERROR"
 RETRIEVAL_ERROR = "RETRIEVAL_ERROR"
 GENERATION_ERROR = "GENERATION_ERROR"
-_CITATION_PATTERN = re.compile(r"\[(S\d+)\]")
 
 RAG_ANSWER_SYSTEM = (
     "你是跨境独立站知识库助手。只能依据提供的 [S1] 形式文档回答。"
@@ -59,23 +58,41 @@ class RAGService:
                 latency_ms=round((time.perf_counter() - started) * 1000, 2),
             )
         try:
-            raw_docs, cached, latency_ms = await hybrid_retrieve(
+            detailed = await hybrid_retrieve_detailed(
                 typed.query,
                 typed.lang,
                 typed.price_max,
                 typed.top_k,
                 task_id=typed.task_id,
             )
-            documents = normalize_documents(list(raw_docs or []))
+            if not detailed.success:
+                return RAGRetrievalResult(
+                    success=False,
+                    retrieval_version=settings.RAG_RETRIEVAL_VERSION,
+                    retrieval_mode=detailed.mode,
+                    degraded=detailed.degraded,
+                    channel_errors=detailed.channel_errors,
+                    candidate_counts=detailed.candidate_counts,
+                    diagnostics=detailed.diagnostics,
+                    error_code=detailed.error_code or RETRIEVAL_ERROR,
+                    error_msg="RAG retrieval failed",
+                    latency_ms=detailed.latency_ms,
+                )
+            documents = normalize_documents(list(detailed.raw_documents or []))
             citations = citations_for_documents(documents)
             return RAGRetrievalResult(
                 success=True,
                 documents=documents,
                 citations=citations,
-                cached=bool(cached),
+                cached=detailed.cached,
                 recall_count=len(documents),
-                latency_ms=max(float(latency_ms), 0),
+                latency_ms=max(float(detailed.latency_ms), 0),
                 retrieval_version=settings.RAG_RETRIEVAL_VERSION,
+                retrieval_mode=detailed.mode,
+                degraded=detailed.degraded,
+                channel_errors=detailed.channel_errors,
+                candidate_counts=detailed.candidate_counts,
+                diagnostics=detailed.diagnostics,
             )
         except Exception as exc:
             latency_ms = round((time.perf_counter() - started) * 1000, 2)
@@ -122,6 +139,10 @@ class RAGService:
                 cached=retrieval.cached,
                 retrieval_latency_ms=retrieval.latency_ms,
                 total_latency_ms=round((time.perf_counter() - started) * 1000, 2),
+                retrieval_mode=retrieval.retrieval_mode,
+                degraded=retrieval.degraded,
+                channel_errors=retrieval.channel_errors,
+                candidate_counts=retrieval.candidate_counts,
                 error_code=retrieval.error_code,
                 error_msg=retrieval.error_msg,
             )
@@ -134,6 +155,10 @@ class RAGService:
                 cached=retrieval.cached,
                 retrieval_latency_ms=retrieval.latency_ms,
                 total_latency_ms=round((time.perf_counter() - started) * 1000, 2),
+                retrieval_mode=retrieval.retrieval_mode,
+                degraded=retrieval.degraded,
+                channel_errors=retrieval.channel_errors,
+                candidate_counts=retrieval.candidate_counts,
             )
 
         context = format_rag_context(retrieval.documents)
@@ -164,15 +189,16 @@ class RAGService:
                 },
             )
             answer, source, generation_error = fallback, "template", "generation_failed"
-        known = {citation.citation_id for citation in retrieval.citations}
-        referenced = set(_CITATION_PATTERN.findall(answer or ""))
-        valid = referenced & known
-        invalid = referenced - known
+        clean_answer, valid, invalid = validate_answer_citations(
+            answer,
+            retrieval.citations,
+        )
         grounded = bool(valid) and not invalid
+        citation_status = "invalid" if invalid else ("valid" if valid else "missing")
         generation_failed = bool(generation_error) and generation_error not in {"no_api_key"}
         return RAGAnswerResult(
             success=True,
-            answer=answer,
+            answer=clean_answer,
             documents=retrieval.documents,
             citations=retrieval.citations,
             grounded=grounded,
@@ -180,6 +206,12 @@ class RAGService:
             cached=retrieval.cached,
             retrieval_latency_ms=retrieval.latency_ms,
             total_latency_ms=round((time.perf_counter() - started) * 1000, 2),
+            invalid_citation_ids=invalid,
+            citation_status=citation_status,
+            retrieval_mode=retrieval.retrieval_mode,
+            degraded=retrieval.degraded,
+            channel_errors=retrieval.channel_errors,
+            candidate_counts=retrieval.candidate_counts,
             error_code=GENERATION_ERROR if generation_failed else "",
             error_msg="RAG answer generation used safe fallback" if generation_failed else "",
         )
