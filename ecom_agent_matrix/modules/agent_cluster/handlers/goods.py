@@ -1,83 +1,61 @@
-"""商品检索 handler：按名搜 SKU，或目录统计/列表。由 Query Agent 调用，不是独立 Agent。"""
+"""商品检索 workflow：typed request 编排目录或 SKU Skill。"""
+from __future__ import annotations
+
 import time
+
+from pydantic import ValidationError
 
 from ecom_agent_matrix.core.logging_config import setup_logger
 from ecom_agent_matrix.core.skill.skill_registry import exec_skill
-from ecom_agent_matrix.modules.skills.goods_catalog import is_catalog_query, wants_full_catalog
+from ecom_agent_matrix.core.tasking import TaskContext, WorkflowResult, ensure_task_context
+from ecom_agent_matrix.core.tasking.result import INVALID_REQUEST, MISSING_PRODUCT, SKILL_FAILED
+from ecom_agent_matrix.modules.parsers.goods import parse_goods_request
 
 logger = setup_logger("agent.goods")
 
 
-def _extract_product_name(payload: dict) -> str:
-    for key in ("product_name", "goods_name", "name", "query", "user_query", "text"):
-        val = payload.get(key)
-        if val is not None and str(val).strip():
-            return _clean_product_query(str(val).strip())
-    return ""
+def _metadata(started: float, **extra) -> dict:
+    return {
+        "workflow": "goods",
+        "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+        **extra,
+    }
 
 
-def _clean_product_query(text: str) -> str:
-    """去掉任务意图噪声，尽量留下商品名（如「防水背包的竞价对比」→「防水背包」）。"""
-    import re
-
-    t = str(text or "").strip()
-    t = re.sub(
-        r"(我想知道|帮我|请|查询|查一下|看看)?",
-        "",
-        t,
-        count=1,
-    )
-    t = re.sub(
-        r"(的)?(竞价对比|价格对比|比价|竞品监控|价格监控|库存|备货|补货).*$",
-        "",
-        t,
-    )
-    t = re.sub(r"[的了呢吗啊]+$", "", t.strip())
-    return t.strip() or str(text or "").strip()
-
-
-def _want_catalog(payload: dict) -> bool:
-    mode = str(payload.get("mode") or payload.get("goods_mode") or "").strip().lower()
-    if mode in {"catalog", "list", "count"}:
-        return True
-    if str(payload.get("task_type") or "").strip() == "goods_catalog":
-        return True
-    if payload.get("list_all") or payload.get("catalog"):
-        return True
-    text = " ".join(
-        str(payload.get(k) or "")
-        for k in ("query", "user_query", "text", "product_name")
-    )
-    return is_catalog_query(text)
-
-
-async def handle_goods(payload: dict) -> tuple[bool, str, dict]:
-    """商品目录统计/列表，或按商品名检索候选 SKU。供 Query Agent 调用。"""
+async def run_goods_workflow(task: dict | TaskContext) -> WorkflowResult:
+    """解析商品请求并编排一个商品 Skill。"""
     started = time.perf_counter()
-    product_name = _extract_product_name(payload)
-    top_k = int(payload.get("top_k", 5))
-    catalog = _want_catalog(payload)
+    ctx = ensure_task_context(task)
+    try:
+        request = parse_goods_request(ctx)
+    except (ValidationError, TypeError, ValueError) as exc:
+        return WorkflowResult(
+            success=False,
+            error_code=INVALID_REQUEST,
+            error_msg=f"商品请求参数不合法：{exc}",
+            data={"query_kind": "goods", "candidates": [], "best_sku": None},
+            metadata=_metadata(started),
+        )
 
-    if catalog:
+    product_name = request.product_name or ""
+    if request.mode == "catalog":
         catalog_params: dict = {
-            "offset": int(payload.get("offset", 0)),
-            "category": payload.get("category"),
-            "order_by": payload.get("order_by", "id"),
+            "offset": request.offset,
+            "category": request.category,
+            "order_by": request.order_by,
             "query": product_name,
-            "list_all": bool(payload.get("list_all")) or wants_full_catalog(product_name),
-            "store_id": payload.get("store_id") or payload.get("scope"),
+            "list_all": request.list_all,
+            "store_id": request.store_id,
         }
-        if payload.get("limit") is not None:
-            catalog_params["limit"] = int(payload["limit"])
-        elif payload.get("top_k") is not None and not catalog_params["list_all"]:
-            catalog_params["limit"] = int(payload["top_k"])
+        if request.limit is not None:
+            catalog_params["limit"] = request.limit
         skill_result = await exec_skill("goods_catalog", catalog_params)
         data = skill_result.data or {}
-        elapsed_ms = (time.perf_counter() - started) * 1000
-        return (
-            skill_result.success,
-            skill_result.error_msg if not skill_result.success else "",
-            {
+        return WorkflowResult(
+            success=skill_result.success,
+            error_code="" if skill_result.success else SKILL_FAILED,
+            error_msg="" if skill_result.success else skill_result.error_msg,
+            data={
                 "query_kind": "goods_catalog",
                 "mode": "catalog",
                 "product_name": product_name,
@@ -97,41 +75,62 @@ async def handle_goods(payload: dict) -> tuple[bool, str, dict]:
                 "category": data.get("category"),
                 "candidates": [],
                 "best_sku": None,
-                "latency_ms": round(elapsed_ms, 2),
             },
+            metadata=_metadata(
+                started,
+                skill_error_code=skill_result.error_code if not skill_result.success else "",
+            ),
         )
 
     if not product_name:
-        return (
-            False,
-            "缺少商品名，请提供 product_name 或 query；查全库请说「有多少商品/列出商品」",
-            {"query_kind": "goods_search", "mode": "search", "product_name": "", "candidates": [], "best_sku": None},
+        return WorkflowResult(
+            success=False,
+            error_code=MISSING_PRODUCT,
+            error_msg="缺少商品名，请提供 product_name 或 query；查全库请说「有多少商品/列出商品」",
+            data={
+                "query_kind": "goods_search",
+                "mode": "search",
+                "product_name": "",
+                "candidates": [],
+                "best_sku": None,
+            },
+            metadata=_metadata(started),
         )
 
     skill_result = await exec_skill(
         "goods_sku_search",
-        {"product_name": product_name, "top_k": top_k},
+        {"product_name": product_name, "top_k": request.top_k},
     )
     data = skill_result.data or {}
-    elapsed_ms = (time.perf_counter() - started) * 1000
-    ok = skill_result.success and bool(data.get("candidates"))
-    return (
-        ok,
-        (
-            skill_result.error_msg
-            if not skill_result.success
-            else ("未找到匹配商品" if not data.get("candidates") else "")
-        ),
-        {
+    candidates = data.get("candidates", [])
+    success = skill_result.success and bool(candidates)
+    error_msg = (
+        skill_result.error_msg
+        if not skill_result.success
+        else ("未找到匹配商品" if not candidates else "")
+    )
+    return WorkflowResult(
+        success=success,
+        error_code="" if success else SKILL_FAILED,
+        error_msg=error_msg,
+        data={
             "query_kind": "goods_search",
             "mode": "search",
             "product_name": product_name,
-            "candidates": data.get("candidates", []),
+            "candidates": candidates,
             "best_sku": data.get("best_sku"),
             "count": data.get("count", 0),
             "match_mode": data.get("match_mode", "none"),
             "semantic_fallback_used": data.get("semantic_fallback_used", False),
             "semantic_error": data.get("semantic_error", ""),
-            "latency_ms": round(elapsed_ms, 2),
         },
+        metadata=_metadata(
+            started,
+            skill_error_code=skill_result.error_code if not skill_result.success else "",
+        ),
     )
+
+
+async def handle_goods(task: dict | TaskContext) -> tuple[bool, str, dict]:
+    """兼容旧 Query Agent/Handler tuple 协议。"""
+    return (await run_goods_workflow(task)).as_legacy_tuple()

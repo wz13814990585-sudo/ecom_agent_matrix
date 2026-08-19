@@ -5,5 +5,11 @@ from ecom_agent_matrix.core.tasking.normalizer import (
     ensure_task_context,
     normalize_task_context,
 )
+from ecom_agent_matrix.core.tasking.result import WorkflowResult
 
-__all__ = ["TaskContext", "ensure_task_context", "normalize_task_context"]
+__all__ = [
+    "TaskContext",
+    "WorkflowResult",
+    "ensure_task_context",
+    "normalize_task_context",
+]
