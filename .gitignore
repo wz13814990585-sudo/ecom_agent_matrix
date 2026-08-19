@@ -1,0 +1,10 @@
+.env
+.env.local
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+models/
+*.log
+dump.rdb
+*.rdb

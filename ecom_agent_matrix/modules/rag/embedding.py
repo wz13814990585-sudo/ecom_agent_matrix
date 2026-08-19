@@ -1,0 +1,64 @@
+"""向量化、重排模型封装。"""
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+
+import torch
+from sentence_transformers import SentenceTransformer
+
+from ecom_agent_matrix.config.settings import settings
+from ecom_agent_matrix.db.redis_client import AsyncRedisClient
+
+_embed_model = None
+CACHE_TTL = 3600
+# 本地路径不存在时回退到 HuggingFace Hub
+_HF_FALLBACK = "BAAI/bge-small-en-v1.5"
+
+
+def resolve_embed_model_name() -> str:
+    raw = (settings.EMBED_MODEL_PATH or "").strip() or _HF_FALLBACK
+    path = Path(raw)
+    if path.exists():
+        return str(path)
+    # 形如 org/name 的 Hub 模型名
+    if "/" in raw and not raw.startswith("."):
+        return raw
+    return _HF_FALLBACK
+
+
+def get_embed_model() -> SentenceTransformer:
+    global _embed_model
+    if _embed_model is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        name = resolve_embed_model_name()
+        _embed_model = SentenceTransformer(name, device=device)
+    return _embed_model
+
+
+async def get_text_embedding(text: str) -> list[float]:
+    """获取文本向量，优先读 Redis 缓存。"""
+    redis = await AsyncRedisClient.get_client()
+    cache_key = f"embed:{hash(text)}"
+    cache_data = await redis.get(cache_key)
+    if cache_data:
+        return json.loads(cache_data)
+    model = get_embed_model()
+    vec = await asyncio.to_thread(model.encode, text)
+    vec = vec.tolist()
+    await redis.set(cache_key, json.dumps(vec), ex=CACHE_TTL)
+    return vec
+
+
+async def get_text_embeddings_batch(texts: list[str], batch_size: int = 32) -> list[list[float]]:
+    """批量向量化（跳过 Redis，适合回填脚本）。"""
+    if not texts:
+        return []
+    model = get_embed_model()
+
+    def _encode():
+        arr = model.encode(texts, batch_size=batch_size, show_progress_bar=False)
+        return [row.tolist() for row in arr]
+
+    return await asyncio.to_thread(_encode)

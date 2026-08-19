@@ -1,0 +1,6 @@
+{
+  "files.associations": {
+    "*.sql": "postgres"
+  },
+  "sql.dialect": "PostgreSQL"
+}

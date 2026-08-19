@@ -1,0 +1,35 @@
+# 异步核心（asyncio 为标准库，勿 pip 安装）
+aiohttp
+aiopg
+redis>=5.0
+
+# LLM / Embedding / Rerank（API 运行时可按需裁剪）
+transformers
+torch
+sentence-transformers
+rank_bm25
+jieba
+
+# 微调相关（可选，本地训练再装）
+# peft
+# bitsandbytes
+# vllm
+
+# 数据库
+psycopg2-binary
+pgvector
+
+# Web服务
+fastapi
+uvicorn[standard]
+pydantic-settings
+pydantic>=2.0
+
+# 数据处理
+pandas
+numpy
+python-multipart
+
+# 电商/工具
+python-dotenv
+jinja2

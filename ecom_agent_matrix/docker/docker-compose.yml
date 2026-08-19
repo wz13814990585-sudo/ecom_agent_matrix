@@ -1,0 +1,51 @@
+# 在项目根目录执行:
+#   docker compose -f ecom_agent_matrix/docker/docker-compose.yml up --build
+#
+# Postgres/Redis 密码与库名读取根目录 .env（PG_PWD / PG_USER / PG_DB / REDIS_PASSWORD）
+# 生产请设置 API_KEY，且勿把 DB/Redis 端口暴露到公网。
+
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: ecom_agent_matrix/docker/Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../../.env
+    environment:
+      PG_HOST: postgres
+      REDIS_HOST: redis
+    depends_on:
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${PG_PWD:-postgres}
+      POSTGRES_DB: ${PG_DB:-ecom_matrix}
+    # 仅本机可访问，避免误暴露到局域网
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    command: >
+      sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then
+        redis-server --requirepass "$$REDIS_PASSWORD";
+      else
+        redis-server;
+      fi'
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    ports:
+      - "127.0.0.1:6379:6379"
+
+volumes:
+  pgdata:
