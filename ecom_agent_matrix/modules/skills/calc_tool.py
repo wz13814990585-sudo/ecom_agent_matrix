@@ -1,13 +1,37 @@
 """利润/库存测算工具。"""
 # modules/skills/calc_tool.py
+from pydantic import BaseModel, ConfigDict, Field
+
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
+
+
+class ProfitCalcInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    cost: float = Field(ge=0)
+    shipping: float = Field(ge=0)
+    commission_rate: float = Field(ge=0, lt=1)
+    sell_price: float = Field(ge=0)
+
+
+class ProfitCalcOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    unit_total_cost: float
+    gross_profit: float
+    profit_ratio: float
+    break_even_price: float
+
 
 @register_skill
 class ProfitCalcTool(BaseSkill):
     read_only = True
     side_effect = False
     risk_level = "low"
+    idempotent = True
+    input_model = ProfitCalcInput
+    output_model = ProfitCalcOutput
     skill_name = "profit_calc"
     skill_desc = "跨境独立站利润测算，参数：cost采购价、shipping物流分摊、commission_rate平台佣金、sell_price售价"
 

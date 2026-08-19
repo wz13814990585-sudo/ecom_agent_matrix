@@ -3,9 +3,56 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
 from ecom_agent_matrix.db.base import AsyncPGClient
+
+
+class PriceMonitorInput(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        allow_inf_nan=False,
+    )
+
+    target_sku: str = Field(min_length=1)
+    competitor: str = Field(min_length=1)
+    compete_price: float = Field(gt=0)
+    warn_threshold: float = Field(default=-10, le=0)
+
+
+class PriceMonitorOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    history_min_compete_price: float
+    current_price_offset: float
+    compete_price: float
+    warn_threshold: float
+    is_trigger_warn: bool
+    warn_message: str
+
+
+class RecordCompetitorPriceInput(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        allow_inf_nan=False,
+    )
+
+    target_sku: str = Field(min_length=1)
+    competitor: str = Field(min_length=1)
+    compete_price: float = Field(gt=0)
+
+
+class RecordCompetitorPriceOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    record_id: int | None
+    target_sku: str
+    competitor: str
+    compete_price: float
 
 
 def _as_float(value) -> float:
@@ -30,6 +77,9 @@ class CompetitorPriceMonitor(BaseSkill):
     read_only = True
     side_effect = False
     risk_level = "medium"
+    idempotent = True
+    input_model = PriceMonitorInput
+    output_model = PriceMonitorOutput
     skill_name = "price_monitor"
     skill_desc = (
         "只读查询竞品历史价格并判定告警，参数 target_sku、competitor、compete_price、"
@@ -86,6 +136,9 @@ class RecordCompetitorPrice(BaseSkill):
     read_only = False
     side_effect = True
     risk_level = "medium"
+    idempotent = False
+    input_model = RecordCompetitorPriceInput
+    output_model = RecordCompetitorPriceOutput
     skill_name = "record_competitor_price"
     skill_desc = "记录新的竞品价格，参数 target_sku、competitor、compete_price"
 

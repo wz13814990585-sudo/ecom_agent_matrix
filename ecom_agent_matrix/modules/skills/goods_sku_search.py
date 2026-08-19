@@ -1,12 +1,44 @@
 """商品名 → SKU 检索：字面/pg_trgm 优先，向量语义兜底。"""
 from __future__ import annotations
 
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
 from ecom_agent_matrix.config.constants import TABLE_GOODS, TABLE_VECTOR_GOODS
 from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
 from ecom_agent_matrix.db.base import AsyncPGClient
 from ecom_agent_matrix.modules.rag.embedding import get_text_embedding
+
+
+class GoodsSkuSearchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    product_name: str | None = None
+    query: str | None = None
+    name: str | None = None
+    top_k: int = Field(default=5, ge=1)
+    force_semantic: bool = False
+
+    @model_validator(mode="after")
+    def require_search_text(self) -> "GoodsSkuSearchInput":
+        if not any((self.product_name, self.query, self.name)):
+            raise ValueError("必须提供 product_name、query 或 name")
+        return self
+
+
+class GoodsSkuSearchOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    product_name: str
+    candidates: list[dict[str, Any]]
+    best_sku: str | None
+    count: int = Field(ge=0)
+    match_mode: str
+    semantic_fallback_used: bool
+    semantic_error: str
 
 
 def _row_to_candidate(
@@ -162,6 +194,9 @@ class GoodsSkuSearchTool(BaseSkill):
     read_only = True
     side_effect = False
     risk_level = "low"
+    idempotent = True
+    input_model = GoodsSkuSearchInput
+    output_model = GoodsSkuSearchOutput
     skill_name = "goods_sku_search"
     skill_desc = (
         "根据中文/英文商品名查候选 SKU："

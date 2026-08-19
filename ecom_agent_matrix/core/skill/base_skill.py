@@ -1,13 +1,21 @@
 """工具抽象基类。"""
 # core/skill/base_skill.py
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from pydantic import BaseModel
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from ecom_agent_matrix.core.skill.spec import SkillSpec
 
 # 所有工具统一返回结果模型
 class SkillResult(BaseModel):
-    success: bool          # 是否执行成功
-    data: dict = {}        # 成功时返回的业务数据
-    error_msg: str = ""    # 失败时存储错误描述
+    success: bool
+    data: dict[str, Any] = Field(default_factory=dict)
+    error_code: str = ""
+    error_msg: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 class BaseSkill(ABC):
     """所有电商工具的父类，抽象约束，所有技能必须继承此类"""
@@ -18,6 +26,27 @@ class BaseSkill(ABC):
     read_only: bool = False
     side_effect: bool = True
     risk_level: str = "high"
+    skill_version: str = "1.0"
+    timeout_seconds: float = 30.0
+    idempotent: bool = False
+    input_model: type[BaseModel] | None = None
+    output_model: type[BaseModel] | None = None
+
+    @classmethod
+    def spec(cls) -> SkillSpec:
+        """从兼容类属性生成统一契约，旧 Skill 无需一次性迁移。"""
+        return SkillSpec(
+            name=cls.skill_name,
+            description=cls.skill_desc,
+            version=cls.skill_version,
+            read_only=cls.read_only,
+            side_effect=cls.side_effect,
+            risk_level=cls.risk_level,
+            timeout_seconds=cls.timeout_seconds,
+            idempotent=cls.idempotent,
+            input_model=cls.input_model,
+            output_model=cls.output_model,
+        )
 
     @abstractmethod
     async def run(self, params: dict) -> SkillResult:

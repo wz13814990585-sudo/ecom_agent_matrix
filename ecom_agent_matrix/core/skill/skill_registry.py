@@ -1,11 +1,10 @@
-"""工具注册中心与统一权限执行上下文。"""
+"""Skill 注册、查询与兼容调用入口。"""
 # core/skill/skill_registry.py
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Dict, Iterator, Type
 
-from ecom_agent_matrix.config.constants import AGENT_EXEC, AGENT_QUERY
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 
 # 全局工具容器：key=skill_name，value=工具类
@@ -36,49 +35,38 @@ def skill_execution_context(agent_id: str) -> Iterator[SkillExecutionContext]:
         _execution_context.reset(token)
 
 
+def current_skill_execution_context() -> SkillExecutionContext | None:
+    """返回当前异步调用链继承的 Skill 身份。"""
+    return _execution_context.get()
+
+
 def register_skill(skill_cls: Type[BaseSkill]) -> Type[BaseSkill]:
-    """装饰器：自动将工具类注册到全局容器"""
-    skill_container[skill_cls.skill_name] = skill_cls
+    """注册 Skill，并在启动阶段校验契约与重复名称。"""
+    if not isinstance(skill_cls, type) or not issubclass(skill_cls, BaseSkill):
+        raise TypeError("register_skill 仅接受 BaseSkill 子类")
+
+    spec = skill_cls.spec()
+    name = spec.name.strip()
+    if not name:
+        raise ValueError("skill_name 不能为空")
+    if name in skill_container:
+        raise ValueError(f"Skill 重复注册：{name}")
+    skill_container[name] = skill_cls
     return skill_cls
 
 
+def lookup_skill(skill_name: str) -> Type[BaseSkill] | None:
+    """按名称查询 Skill class。"""
+    return skill_container.get(skill_name)
+
+
+def list_skills() -> list[str]:
+    """列出已注册 Skill 名称。"""
+    return sorted(skill_container)
+
+
 async def exec_skill(skill_name: str, params: dict) -> SkillResult:
-    """
-    全局统一工具调度函数
-    :param skill_name: 工具名称
-    :param params: 执行参数
-    :return: 标准化执行结果
-    """
-    # 判断工具是否存在
-    if skill_name not in skill_container:
-        return SkillResult(
-            success=False,
-            error_msg=f"不存在该工具：{skill_name}"
-        )
-    skill_cls = skill_container[skill_name]
-    context = _execution_context.get()
-    is_pure_read = skill_cls.read_only is True and skill_cls.side_effect is False
+    """向后兼容入口；实际执行统一委托给 SkillExecutor。"""
+    from ecom_agent_matrix.core.skill.executor import skill_executor
 
-    # 无调用主体时只允许明确的纯只读 Skill，写 Skill 必须由 Exec context 执行。
-    if context is None and not is_pure_read:
-        return SkillResult(
-            success=False,
-            error_msg=f"缺少 SkillExecutionContext，拒绝执行 write Skill：{skill_name}",
-        )
-
-    if context and context.agent_id == AGENT_QUERY and not is_pure_read:
-        return SkillResult(
-            success=False,
-            error_msg=f"data_query 无权执行非只读 Skill：{skill_name}",
-        )
-
-    # Exec 保留现有业务能力；具体允许调用哪些 Skill 仍由既有 workflow 决定。
-    if context is not None and context.agent_id not in {AGENT_QUERY, AGENT_EXEC}:
-        return SkillResult(
-            success=False,
-            error_msg=f"未授权的 Skill execution context：{context.agent_id}",
-        )
-
-    skill_instance = skill_cls()
-    result = await skill_instance.run(params)
-    return result
+    return await skill_executor.execute(skill_name, params)
