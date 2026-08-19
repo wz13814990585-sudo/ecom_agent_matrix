@@ -12,6 +12,11 @@ from ecom_agent_matrix.core.mcp.message import MCPMessage
 from ecom_agent_matrix.core.mcp.registry import register_agent
 from ecom_agent_matrix.core.mcp.reply import build_reply
 from ecom_agent_matrix.core.skill.skill_registry import skill_execution_context
+from ecom_agent_matrix.core.tasking import (
+    TaskContext,
+    ensure_task_context,
+    normalize_task_context,
+)
 from ecom_agent_matrix.modules.agent_cluster.handlers import (
     handle_ad,
     handle_crm,
@@ -32,9 +37,11 @@ def _get_semaphore() -> asyncio.Semaphore:
     return _task_semaphore
 
 
-def infer_exec_kind(payload: dict) -> str:
+def infer_exec_kind(task: dict | TaskContext) -> str:
     """Exec Agent 内部意图：广告 / 报表 / 风控 / 社媒 / 客服答复。"""
-    task_type = str(payload.get("task_type") or payload.get("exec_kind") or "").strip()
+    ctx = ensure_task_context(task)
+    payload = ctx.to_payload()
+    task_type = ctx.task_type or ctx.exec_kind or ""
     if task_type in {"ad_optimize", "ad"}:
         return "ad"
     if task_type in {"ops_report", "report"}:
@@ -46,7 +53,7 @@ def infer_exec_kind(payload: dict) -> str:
     if task_type in {"customer_service", "crm"}:
         return "crm"
 
-    text = " ".join(str(payload.get(k) or "") for k in ("query", "user_query", "text"))
+    text = ctx.query
     lower = text.lower()
     if any(k in text for k in ("风控", "触发风险")) or "risk" in lower:
         return "risk"
@@ -69,9 +76,17 @@ def infer_exec_kind(payload: dict) -> str:
     return "crm"
 
 
-async def run_exec(payload: dict, *, task_id: str = "") -> tuple[bool, str, dict]:
+async def run_exec(
+    task: dict | TaskContext,
+    *,
+    task_id: str = "",
+) -> tuple[bool, str, dict]:
+    ctx = ensure_task_context(task)
+    if task_id:
+        ctx = ctx.with_updates(task_id=task_id.strip())
+    payload = ctx.to_payload()
     with skill_execution_context(AGENT_EXEC):
-        kind = infer_exec_kind(payload)
+        kind = infer_exec_kind(ctx)
         if kind == "ad":
             return await handle_ad(payload)
         if kind == "report":
@@ -80,7 +95,7 @@ async def run_exec(payload: dict, *, task_id: str = "") -> tuple[bool, str, dict
             return await handle_risk(payload)
         if kind == "social":
             return await handle_social(payload)
-        return await handle_crm(payload, task_id=task_id)
+        return await handle_crm(payload, task_id=ctx.task_id)
 
 
 @register_agent(AGENT_EXEC)
@@ -97,9 +112,14 @@ async def exec_agent(msg_queue: asyncio.Queue):
         started = time.perf_counter()
         try:
             async with sem:
-                payload = dict(msg.content or {})
+                ctx = normalize_task_context(
+                    msg.content or {},
+                    task_id=msg.task_id,
+                    correlation_id=msg.correlation_id,
+                    source_agent=AGENT_EXEC,
+                )
                 ok, err, data = await asyncio.wait_for(
-                    run_exec(payload, task_id=msg.task_id),
+                    run_exec(ctx),
                     timeout=float(settings.EXEC_SKILL_TIMEOUT),
                 )
                 elapsed_ms = (time.perf_counter() - started) * 1000

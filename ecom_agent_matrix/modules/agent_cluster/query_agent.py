@@ -12,6 +12,11 @@ from ecom_agent_matrix.core.mcp.message import MCPMessage
 from ecom_agent_matrix.core.mcp.registry import register_agent
 from ecom_agent_matrix.core.mcp.reply import build_reply
 from ecom_agent_matrix.core.skill.skill_registry import skill_execution_context
+from ecom_agent_matrix.core.tasking import (
+    TaskContext,
+    ensure_task_context,
+    normalize_task_context,
+)
 from ecom_agent_matrix.modules.agent_cluster.handlers import (
     handle_data_check,
     handle_goods,
@@ -33,9 +38,11 @@ def _get_semaphore() -> asyncio.Semaphore:
     return _task_semaphore
 
 
-def infer_query_kind(payload: dict) -> str:
+def infer_query_kind(task: dict | TaskContext) -> str:
     """Query Agent 内部意图：商品 / 库存 / 竞品 / 数据校验。不对外暴露为独立 Agent。"""
-    task_type = str(payload.get("task_type") or payload.get("query_kind") or "").strip()
+    ctx = ensure_task_context(task)
+    payload = ctx.to_payload()
+    task_type = ctx.task_type or ctx.query_kind or ""
     if task_type in {"goods_catalog", "goods_search"}:
         return "goods"
     if task_type in {"stock_analysis", "stock"}:
@@ -45,10 +52,7 @@ def infer_query_kind(payload: dict) -> str:
     if task_type in {"data_check", "order_query", "ad_query"}:
         return "data_check"
 
-    text = " ".join(
-        str(payload.get(k) or "")
-        for k in ("query", "user_query", "text", "product_name")
-    )
+    text = " ".join(value for value in (ctx.query, ctx.product_name or "") if value)
     lower = text.lower()
     if is_catalog_query(text) or payload.get("mode") == "catalog":
         return "goods"
@@ -91,15 +95,17 @@ async def _ensure_sku(payload: dict) -> tuple[dict, dict | None]:
     return merged, None
 
 
-async def run_query(payload: dict) -> tuple[bool, str, dict]:
+async def run_query(task: dict | TaskContext) -> tuple[bool, str, dict]:
     """执行一次只读查询（可供单测直接调用）。"""
+    ctx = ensure_task_context(task)
     with skill_execution_context(AGENT_QUERY):
-        return await _run_query_in_context(payload)
+        return await _run_query_in_context(ctx)
 
 
-async def _run_query_in_context(payload: dict) -> tuple[bool, str, dict]:
+async def _run_query_in_context(ctx: TaskContext) -> tuple[bool, str, dict]:
     """Query workflow 实现；调用的所有 Skill 继承统一只读上下文。"""
-    kind = infer_query_kind(payload)
+    payload = ctx.to_payload()
+    kind = infer_query_kind(ctx)
     if kind == "goods":
         return await handle_goods(payload)
 
@@ -134,9 +140,14 @@ async def query_agent(msg_queue: asyncio.Queue):
         started = time.perf_counter()
         try:
             async with sem:
-                payload = dict(msg.content or {})
+                ctx = normalize_task_context(
+                    msg.content or {},
+                    task_id=msg.task_id,
+                    correlation_id=msg.correlation_id,
+                    source_agent=AGENT_QUERY,
+                )
                 ok, err, data = await asyncio.wait_for(
-                    run_query(payload),
+                    run_query(ctx),
                     timeout=float(settings.QUERY_SKILL_TIMEOUT),
                 )
                 elapsed_ms = (time.perf_counter() - started) * 1000
