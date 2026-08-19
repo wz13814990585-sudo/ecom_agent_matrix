@@ -10,6 +10,10 @@ from ecom_agent_matrix.core.skill.skill_registry import exec_skill
 from ecom_agent_matrix.core.tasking import TaskContext, WorkflowResult, ensure_task_context
 from ecom_agent_matrix.core.tasking.result import INVALID_REQUEST, PARTIAL_SUCCESS, SKILL_FAILED
 from ecom_agent_matrix.modules.parsers.crm import CRMRequest, parse_crm_request
+from ecom_agent_matrix.modules.rag.formatter import format_rag_context, normalize_documents
+from ecom_agent_matrix.modules.rag.policy import should_retrieve_knowledge
+from ecom_agent_matrix.modules.rag.schemas import RAGRequest
+from ecom_agent_matrix.modules.rag.service import rag_service
 
 
 def _metadata(started: float, **extra) -> dict:
@@ -49,6 +53,32 @@ async def _run_taobao(request: CRMRequest) -> tuple[dict, str]:
         },
         "" if result.success else (result.error_code or SKILL_FAILED),
     )
+
+
+def _upstream_knowledge(request: CRMRequest) -> tuple[str, list[dict], int]:
+    for value in request.upstream_context.values():
+        if not (
+            isinstance(value, dict)
+            and value.get("task_type") == "knowledge_qa"
+            and isinstance(value.get("data"), dict)
+        ):
+            continue
+        data = value["data"]
+        citations = [
+            item for item in (data.get("citations") or []) if isinstance(item, dict)
+        ][:20]
+        raw_docs = data.get("documents") or data.get("docs") or []
+        documents = (
+            normalize_documents([item for item in raw_docs if isinstance(item, dict)])
+            if isinstance(raw_docs, list)
+            else []
+        )
+        context = format_rag_context(documents) if documents else ""
+        if not context:
+            context = str(data.get("answer") or data.get("summary") or "").strip()[:5000]
+        if context:
+            return context, citations, len(documents) or len(citations)
+    return "", [], 0
 
 
 async def run_crm_workflow(
@@ -101,12 +131,29 @@ async def run_crm_workflow(
             history = []
 
     taobao_info, taobao_error_code = await _run_taobao(request)
-    has_policy_context = any(
-        isinstance(value, dict)
-        and value.get("task_type") == "knowledge_qa"
-        and bool(value.get("data"))
-        for value in request.upstream_context.values()
+    knowledge_context, citations, rag_doc_count = _upstream_knowledge(request)
+    rag_error = ""
+    has_policy_context = bool(knowledge_context)
+    should_retrieve = (
+        not has_policy_context
+        and not request.is_fallback_route
+        and should_retrieve_knowledge(request.query, request.use_rag)
     )
+    if should_retrieve:
+        retrieval = await rag_service.retrieve(
+            RAGRequest(
+                query=request.query,
+                lang=request.lang,
+                top_k=5,
+                task_id=request.task_id,
+            )
+        )
+        if retrieval.success:
+            knowledge_context = format_rag_context(retrieval.documents)
+            citations = [citation.model_dump() for citation in retrieval.citations]
+            rag_doc_count = retrieval.recall_count
+        else:
+            rag_error = retrieval.error_code or "RETRIEVAL_ERROR"
     reply_result = await exec_skill(
         "crm_reply",
         {
@@ -118,6 +165,8 @@ async def run_crm_workflow(
             "is_fallback_route": request.is_fallback_route,
             "task_id": request.task_id,
             "upstream_context": request.upstream_context,
+            "knowledge_context": knowledge_context,
+            "citations": citations,
         },
     )
     reply_data = reply_result.data or {}
@@ -149,9 +198,9 @@ async def run_crm_workflow(
             memory_errors.append(f"append_assistant:{type(exc).__name__}")
 
     llm_ok = bool(reply_data.get("llm_ok"))
-    rag_used = bool(reply_data.get("rag_used"))
-    rag_doc_count = int(reply_data.get("rag_doc_count") or 0)
-    rag_error = str(reply_data.get("rag_error") or "")
+    rag_used = bool(knowledge_context)
+    rag_doc_count = int(rag_doc_count or reply_data.get("rag_doc_count") or 0)
+    rag_error = rag_error or str(reply_data.get("rag_error") or "")
     errors: list[str] = []
     skill_error_codes: dict[str, str] = {}
     if taobao_error_code:
@@ -184,6 +233,7 @@ async def run_crm_workflow(
             },
             "rag_used": rag_used,
             "rag_doc_count": rag_doc_count,
+            "citations": citations,
             "taobao": taobao_info,
             "partial_success": partial,
         },

@@ -85,6 +85,8 @@ class Settings(BaseSettings):
     RAG_MAX_CONCURRENT: int = 3
     RAG_CACHE_ENABLED: bool = True
     RAG_CACHE_TTL: int = 600
+    RAG_INDEX_VERSION: str = "v1"
+    RAG_RETRIEVAL_VERSION: str = "hybrid-v1"
 
     # 商品 SKU 检索：字面/trgm → 向量语义兜底
     GOODS_SEARCH_TRGM_MIN_SIM: float = 0.15

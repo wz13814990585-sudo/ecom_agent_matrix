@@ -24,29 +24,59 @@ RRF_K = 60
 
 def _cache_key(query: str, lang: str, price_max: Optional[float], top_k: int) -> str:
     payload = json.dumps(
-        {"q": query.strip().lower(), "lang": lang, "price_max": price_max, "top_k": top_k},
+        {
+            "index_version": settings.RAG_INDEX_VERSION,
+            "retrieval_version": settings.RAG_RETRIEVAL_VERSION,
+            "q": query.strip().lower(),
+            "lang": lang,
+            "price_max": price_max,
+            "top_k": top_k,
+        },
         sort_keys=True,
         ensure_ascii=False,
     )
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-    return f"rag:retrieve:{digest}"
+    return (
+        f"rag:retrieve:{settings.RAG_INDEX_VERSION}:"
+        f"{settings.RAG_RETRIEVAL_VERSION}:{digest}"
+    )
 
 
 async def _load_cache(key: str) -> Optional[list[dict]]:
     if not settings.RAG_CACHE_ENABLED:
         return None
-    redis = await AsyncRedisClient.get_client()
-    raw = await redis.get(key)
-    if not raw:
+    try:
+        redis = await AsyncRedisClient.get_client()
+        raw = await redis.get(key)
+        if not raw:
+            return None
+        decoded = json.loads(raw)
+        return decoded if isinstance(decoded, list) else None
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "rag_cache_decode_failed",
+            extra={"event": "rag_cache_decode_failed", "error_type": type(exc).__name__},
+        )
         return None
-    return json.loads(raw)
+    except Exception as exc:
+        logger.warning(
+            "rag_cache_read_failed",
+            extra={"event": "rag_cache_read_failed", "error_type": type(exc).__name__},
+        )
+        return None
 
 
 async def _save_cache(key: str, docs: list[dict]) -> None:
     if not settings.RAG_CACHE_ENABLED:
         return
-    redis = await AsyncRedisClient.get_client()
-    await redis.set(key, json.dumps(docs, ensure_ascii=False), ex=settings.RAG_CACHE_TTL)
+    try:
+        redis = await AsyncRedisClient.get_client()
+        await redis.set(key, json.dumps(docs, ensure_ascii=False), ex=settings.RAG_CACHE_TTL)
+    except Exception as exc:
+        logger.warning(
+            "rag_cache_write_failed",
+            extra={"event": "rag_cache_write_failed", "error_type": type(exc).__name__},
+        )
 
 
 async def vector_search(

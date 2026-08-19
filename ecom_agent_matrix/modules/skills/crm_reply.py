@@ -1,7 +1,6 @@
-"""客服答复 Skill：RAG 拼装 + LLM 生成 + 兜底文案（无 MCP 依赖）。"""
+"""客服答复 Skill：对话 + 已验证业务/知识上下文 + LLM 生成。"""
 from __future__ import annotations
 
-import re
 import json
 from typing import Any
 
@@ -11,6 +10,8 @@ from ecom_agent_matrix.config.constants import LANG_LIST
 from ecom_agent_matrix.core.llm import is_llm_configured, llm_chat
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
+from ecom_agent_matrix.modules.rag.formatter import format_rag_docs
+from ecom_agent_matrix.modules.rag.policy import should_retrieve_knowledge
 
 CRM_SYSTEM_PROMPT = (
     "你是跨境独立站电商客服助手。用简洁、礼貌的中文或用户指定语种回答。"
@@ -24,13 +25,6 @@ CRM_SYSTEM_PROMPT = (
     "若提供「已验证业务上下文」，优先使用其中订单事实与政策内容，不要编造缺失字段。"
 )
 
-_KNOWLEDGE_HINT = re.compile(
-    r"(材质|规格|怎么用|如何使用|介绍|知识|防水|尺寸|清洗|保养|面料|成分|"
-    r"背包|商品|款式|faq|how to|what is|material|care|wash|fabric)",
-    re.IGNORECASE,
-)
-
-
 class CrmReplyInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -43,6 +37,8 @@ class CrmReplyInput(BaseModel):
     is_fallback_route: bool = False
     task_id: str | None = None
     upstream_context: dict[str, Any] = Field(default_factory=dict)
+    knowledge_context: str = ""
+    citations: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def require_query(self) -> "CrmReplyInput":
@@ -60,35 +56,12 @@ class CrmReplyOutput(BaseModel):
     rag_doc_count: int = Field(ge=0)
     rag_error: str
     llm_error: str = ""
+    citations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def should_use_rag(user_query: str, use_rag_flag) -> bool:
-    """use_rag_flag: True/False 显式；None 则按问题启发式。"""
-    if use_rag_flag is False:
-        return False
-    if use_rag_flag is True:
-        return True
-    return bool(_KNOWLEDGE_HINT.search(user_query or ""))
-
-
-def format_rag_docs(docs: list[dict], limit: int = 3) -> str:
-    lines: list[str] = []
-    for i, doc in enumerate(docs[:limit], 1):
-        sku = doc.get("sku") or doc.get("goods_sku") or ""
-        title = doc.get("title") or doc.get("product_name") or sku or f"doc-{i}"
-        body = (
-            doc.get("chunk_text")
-            or doc.get("content")
-            or doc.get("text")
-            or doc.get("chunk")
-            or ""
-        )
-        snippet = str(body).strip().replace("\n", " ")[:320]
-        if not snippet:
-            continue
-        label = f"{title}" if not sku or sku in str(title) else f"{title} | {sku}"
-        lines.append(f"{i}. [{label}] {snippet}")
-    return "\n".join(lines)
+    """旧调用兼容层；实际 retrieval policy 已移至 modules.rag.policy。"""
+    return should_retrieve_knowledge(user_query, use_rag_flag)
 
 
 def fallback_answer(user_query: str, *, is_fallback_route: bool) -> str:
@@ -101,24 +74,6 @@ def fallback_answer(user_query: str, *, is_fallback_route: bool) -> str:
         f"已收到您的问题：{user_query}。"
         "当前大模型未配置或不可用，请稍后再试，或提供订单号以便人工跟进。"
     )
-
-
-async def retrieve_rag_docs(
-    user_query: str, lang: str, task_id: str | None
-) -> tuple[list[dict], str]:
-    try:
-        from ecom_agent_matrix.modules.rag.retriever import hybrid_retrieve
-
-        docs, _cached, _ms = await hybrid_retrieve(
-            user_query,
-            lang if lang in LANG_LIST else "en",
-            None,
-            5,
-            task_id=task_id,
-        )
-        return list(docs or []), ""
-    except Exception as exc:
-        return [], type(exc).__name__
 
 
 @register_skill
@@ -151,23 +106,20 @@ class CrmReplyTool(BaseSkill):
                 history = []
 
             is_fallback_route = bool(params.get("is_fallback_route"))
-            use_rag_flag = params.get("use_rag")  # True/False/None
-            task_id = params.get("task_id")
+            # use_rag 仅保留为兼容输入；retrieval 由 CRM Workflow 负责。
             taobao_info = params.get("taobao_info")
             if not isinstance(taobao_info, dict):
                 taobao_info = {"skipped": True}
             upstream_context = params.get("upstream_context") or {}
             if not isinstance(upstream_context, dict):
                 upstream_context = {}
-
-            rag_docs: list[dict] = []
+            knowledge_context = str(params.get("knowledge_context") or "").strip()[:5000]
+            citations = params.get("citations") or []
+            if not isinstance(citations, list):
+                citations = []
+            citations = [item for item in citations if isinstance(item, dict)][:20]
+            rag_used = bool(knowledge_context)
             rag_error = ""
-            rag_used = False
-            if should_use_rag(user_query, use_rag_flag) and not is_fallback_route:
-                rag_docs, rag_error = await retrieve_rag_docs(
-                    user_query, lang, str(task_id) if task_id else None
-                )
-                rag_used = bool(rag_docs)
 
             answer_text = ""
             llm_ok = False
@@ -178,7 +130,6 @@ class CrmReplyTool(BaseSkill):
                         for h in history[-6:]
                         if isinstance(h, dict)
                     )
-                    rag_block = format_rag_docs(rag_docs)
                     verified_context = json.dumps(
                         upstream_context,
                         ensure_ascii=False,
@@ -195,7 +146,7 @@ class CrmReplyTool(BaseSkill):
                         user_prompt=(
                             f"用户语种偏好: {lang}\n"
                             f"近期对话:\n{hist_snip}\n\n"
-                            f"商品知识检索:\n{rag_block or '(无)'}\n"
+                            f"商品知识检索:\n{knowledge_context or '(无)'}\n"
                             f"已验证业务上下文:\n{verified_context or '(无)'}\n"
                             f"{taobao_block}\n"
                             f"当前问题: {user_query}"
@@ -215,16 +166,13 @@ class CrmReplyTool(BaseSkill):
                                 user_query, is_fallback_route=is_fallback_route
                             )
                             if not rag_used
-                            else (
-                                f"根据商品知识库，与「{user_query}」相关的要点如下：\n"
-                                f"{format_rag_docs(rag_docs)}\n"
-                                "如需更具体答复请补充订单号或商品 SKU。"
-                            ),
+                            else f"根据知识库：\n{knowledge_context}",
                             "llm_ok": False,
                             "rag_used": rag_used,
-                            "rag_doc_count": len(rag_docs),
+                            "rag_doc_count": len(citations),
                             "rag_error": rag_error or type(exc).__name__,
                             "llm_error": type(exc).__name__,
+                            "citations": citations,
                         },
                     )
 
@@ -232,7 +180,7 @@ class CrmReplyTool(BaseSkill):
                 if rag_used:
                     answer_text = (
                         f"根据商品知识库，与「{user_query}」相关的要点如下：\n"
-                        f"{format_rag_docs(rag_docs)}\n"
+                        f"{knowledge_context}\n"
                         "如需更具体答复请补充订单号或商品 SKU。"
                     )
                 else:
@@ -244,8 +192,9 @@ class CrmReplyTool(BaseSkill):
                     "answer": answer_text,
                     "llm_ok": llm_ok,
                     "rag_used": rag_used,
-                    "rag_doc_count": len(rag_docs),
+                    "rag_doc_count": len(citations),
                     "rag_error": rag_error,
+                    "citations": citations,
                 },
             )
         except Exception as exc:

@@ -1,4 +1,13 @@
-"""RAG 模块。"""
-from . import rag_agent
+"""MCP-independent RAG contracts and service。"""
 
-__all__ = ["rag_agent"]
+from .schemas import RAGAnswerResult, RAGDocument, RAGRequest, RAGRetrievalResult
+from .service import RAGService, rag_service
+
+__all__ = [
+    "RAGAnswerResult",
+    "RAGDocument",
+    "RAGRequest",
+    "RAGRetrievalResult",
+    "RAGService",
+    "rag_service",
+]
