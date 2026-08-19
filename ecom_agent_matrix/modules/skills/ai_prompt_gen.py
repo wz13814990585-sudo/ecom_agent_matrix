@@ -23,6 +23,9 @@ def _template_prompt(product: str, scene: str, style: str) -> str:
 
 @register_skill
 class AIPromptGenTool(BaseSkill):
+    read_only = True
+    side_effect = False
+    risk_level = "low"
     skill_name = "ai_prompt_generate"
     skill_desc = "商品 AI 绘图提示词生成（LLM），参数 product、scene、style"
 

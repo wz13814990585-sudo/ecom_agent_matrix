@@ -190,6 +190,9 @@ def _format_structured_summary(parsed: dict, fallback: str) -> str:
 
 @register_skill
 class OpsReportTool(BaseSkill):
+    read_only = True
+    side_effect = False
+    risk_level = "medium"
     skill_name = "ops_report"
     skill_desc = (
         "运营报表聚合，参数 report_type=daily_ops|sales|stock|risk|full、"

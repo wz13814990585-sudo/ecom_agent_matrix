@@ -23,6 +23,9 @@ def _top_sign(params: dict[str, str], secret: str) -> str:
 
 @register_skill
 class TaobaoApiTool(BaseSkill):
+    read_only = False
+    side_effect = True
+    risk_level = "high"
     skill_name = "taobao_api"
     skill_desc = (
         "淘宝开放平台接口调用，参数 method=TOP 方法名（如 taobao.trade.fullinfo.get）、"

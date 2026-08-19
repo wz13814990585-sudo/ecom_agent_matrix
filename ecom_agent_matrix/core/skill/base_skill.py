@@ -14,6 +14,10 @@ class BaseSkill(ABC):
     # 两个类属性必须子类重写
     skill_name: str    # 工具唯一标识，调用工具时使用
     skill_desc: str    # 工具功能描述，供LLM自动选择工具使用
+    # 未显式声明的 Skill 一律按“可写、高风险”处理，保证 fail-closed。
+    read_only: bool = False
+    side_effect: bool = True
+    risk_level: str = "high"
 
     @abstractmethod
     async def run(self, params: dict) -> SkillResult:

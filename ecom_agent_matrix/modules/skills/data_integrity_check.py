@@ -110,6 +110,9 @@ async def _check_orders(order_no: str | None = None, sku: str | None = None, lim
 
 @register_skill
 class DataIntegrityCheckTool(BaseSkill):
+    read_only = True
+    side_effect = False
+    risk_level = "medium"
     skill_name = "data_integrity_check"
     skill_desc = (
         "电商数据完整性校验，参数 scope=goods|order|full、"

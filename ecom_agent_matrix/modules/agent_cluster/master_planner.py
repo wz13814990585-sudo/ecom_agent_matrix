@@ -45,7 +45,7 @@ AVAILABLE_AGENTS: dict[str, str] = {
 
 # 细粒度 task_type → 唯一子 Agent（Master 不再按实体拆步）
 TASK_ROUTE_MAP: dict[str, list[str]] = {
-    "customer_service": [AGENT_RAG],  # 退款规则 / 售后政策 → 知识库
+    "customer_service": [AGENT_EXEC],  # 客服回复 / 售后处理 → CRM workflow
     "stock_analysis": [AGENT_QUERY],
     "social_marketing": [AGENT_EXEC],
     "competitor_watch": [AGENT_QUERY],
@@ -73,7 +73,7 @@ TASK_KEYWORDS: dict[str, list[str]] = {
         "how many products", "list products", "product catalog",
     ],
     "order_query": [
-        "查订单", "订单状态", "物流", "发货", "查一下订单",
+        "查订单", "查询订单", "订单查询", "订单数据", "订单状态", "物流", "发货", "查一下订单",
         "order status", "tracking", "shipment",
     ],
     "ad_query": [
@@ -128,16 +128,20 @@ Available agents (use EXACT ids):
 
 Return ONLY valid JSON, no markdown:
 {{
+  "decision": "dispatch or clarify",
   "agents": ["agent_id1"],
   "confidence": 0.85,
-  "reasoning": "brief reason in one sentence"
+  "reasoning": "brief decision reason in one sentence",
+  "clarification_question": "question when decision is clarify"
 }}
 
 Rules:
 - pick 1 agent in most cases; at most 2 (query then exec) if user both reads AND mutates
 - 查数据 / 有多少 / 库存 / 订单 / 竞品价 / 广告数据 → data_query
 - 调出价 / 改库存 / 触发风控 / 生成报表 / 写文案 → biz_exec
-- 店铺规则 / 运营手册 / FAQ / 怎么退 → knowledge_rag
+- 店铺规则 / 运营手册 / FAQ / 退款规则 → knowledge_rag
+- 客服回复 / 售后处理 → biz_exec（CRM workflow）
+- 无法可靠判断 → decision=clarify，不调用任何 Agent
 - never pick entity agents like goods_lookup / stock_agent / ad_optimizer
 - use exact agent ids from the list above
 """
@@ -178,10 +182,10 @@ _AGENT_ID_ALIASES: dict[str, str] = {
     AGENT_AD: AGENT_EXEC,
     AGENT_REPORT: AGENT_EXEC,
     AGENT_SOCIAL: AGENT_EXEC,
-    AGENT_CRM: AGENT_RAG,
+    AGENT_CRM: AGENT_EXEC,
     "ops_report": AGENT_EXEC,
     "ad_optimizer": AGENT_EXEC,
-    "customer_service": AGENT_RAG,
+    "customer_service": AGENT_EXEC,
 }
 
 
@@ -192,6 +196,8 @@ class PlanResult:
     reasoning: str
     planner: str = "llm"
     raw_llm: str = ""
+    decision: str = "dispatch"  # dispatch | clarify
+    clarification_question: str = ""
 
 
 @dataclass
@@ -306,25 +312,26 @@ def infer_task_type_from_query(query: str) -> str | None:
     return max(scores, key=scores.get)
 
 
-def plan_sub_tasks_rag_default(task_input: dict, memory_hits: list[dict], reason: str) -> PlanResult:
-    """无法识别意图时交给 RAG（文档问答），绝不抛异常。"""
-    payload = _enrich_payload(
-        task_input,
-        memory_hits,
-        "rag_default",
-        extra={"_fallback_route": True},
-    )
+def plan_sub_tasks_clarify(task_input: dict, memory_hits: list[dict], reason: str) -> PlanResult:
+    """无法可靠识别意图时请求澄清，不向子 Agent 分发。"""
     return PlanResult(
-        sub_tasks=[{"target_agent": AGENT_RAG, "payload": payload}],
+        sub_tasks=[],
         plan_confidence=0.3,
         reasoning=reason,
-        planner="rag_default",
+        planner="clarify",
+        decision="clarify",
+        clarification_question="请说明您要查询的数据、咨询的店铺规则，或需要执行的业务操作。",
     )
+
+
+def plan_sub_tasks_rag_default(task_input: dict, memory_hits: list[dict], reason: str) -> PlanResult:
+    """兼容旧调用名；P0 起未知意图改为 clarify。"""
+    return plan_sub_tasks_clarify(task_input, memory_hits, reason)
 
 
 # 兼容旧测试名
 def plan_sub_tasks_crm_default(task_input: dict, memory_hits: list[dict], reason: str) -> PlanResult:
-    return plan_sub_tasks_rag_default(task_input, memory_hits, reason)
+    return plan_sub_tasks_clarify(task_input, memory_hits, reason)
 
 
 def plan_sub_tasks_rules(
@@ -370,10 +377,10 @@ def plan_sub_tasks_keyword(task_input: dict, memory_hits: list[dict]) -> PlanRes
             reasoning=f"关键词推断 task_type={inferred} → {agents}",
             planner="keyword",
         )
-    return plan_sub_tasks_rag_default(
+    return plan_sub_tasks_clarify(
         task_input,
         memory_hits,
-        reason="关键词无法识别意图，兜底知识库 Agent",
+        reason="关键词无法可靠识别意图，需要用户澄清",
     )
 
 
@@ -382,17 +389,42 @@ async def plan_sub_tasks_llm(task_input: dict, memory_hits: list[dict]) -> PlanR
     初始意图规划：
     1. LLM 在 {data_query, biz_exec, knowledge_rag} 中选择
     2. 失败/低置信 → 关键词
-    3. 仍无法识别 → RAG 兜底
+    3. 仍无法识别 → clarify
     """
     query = _extract_query(task_input)
 
+    explicit_task_type = str(task_input.get("task_type") or "").strip()
+    if explicit_task_type in TASK_ROUTE_MAP:
+        return plan_sub_tasks_rules(
+            task_input,
+            memory_hits,
+            task_type=explicit_task_type,
+            planner="rules_explicit_task_type",
+        )
+
+    # 关键业务路由使用确定性规则，避免知识问答、CRM、订单查询相互混淆。
+    inferred = infer_task_type_from_query(query)
+    if inferred is None:
+        return plan_sub_tasks_clarify(
+            task_input,
+            memory_hits,
+            reason="请求缺少可可靠识别的业务意图",
+        )
+    if inferred in {"knowledge_qa", "customer_service", "order_query"}:
+        return plan_sub_tasks_rules(
+            task_input,
+            memory_hits,
+            task_type=inferred,
+            planner="rules_critical_intent",
+        )
+
     if not is_llm_configured():
         result = plan_sub_tasks_keyword(task_input, memory_hits)
-        result.reasoning = "未配置 API Key，使用关键词/知识库兜底"
+        result.reasoning = "未配置 API Key，使用关键词路由或请求澄清"
         if result.planner == "keyword":
             result.planner = "keyword_no_api_key"
-        elif result.planner == "rag_default":
-            result.planner = "rag_default_no_api_key"
+        elif result.planner == "clarify":
+            result.planner = "clarify_no_api_key"
         return result
 
     memory_snippet = json.dumps(_build_memory_context(memory_hits), ensure_ascii=False)[:1500]
@@ -411,16 +443,37 @@ async def plan_sub_tasks_llm(task_input: dict, memory_hits: list[dict]) -> PlanR
             mode=resolve_mode(settings.MASTER_PLAN_MODE),
         )
         parsed = _extract_json(raw.content)
+        decision = str(parsed.get("decision") or "dispatch").strip().lower()
+        if decision == "clarify":
+            result = plan_sub_tasks_clarify(
+                task_input,
+                memory_hits,
+                reason=_truncate_reasoning(str(parsed.get("reasoning") or "LLM 请求澄清")),
+            )
+            result.planner = "llm_clarify"
+            result.plan_confidence = float(parsed.get("confidence", 0.0))
+            result.clarification_question = str(
+                parsed.get("clarification_question") or result.clarification_question
+            )
+            result.raw_llm = raw.content
+            return result
         agents = _validate_agents(parsed.get("agents", []))
         confidence = float(parsed.get("confidence", 0.0))
-        reasoning = str(parsed.get("reasoning", ""))
-        if raw.reasoning_content:
-            tip = _truncate_reasoning(raw.reasoning_content, 200)
-            reasoning = f"{reasoning}\n[thinking] {tip}".strip() if reasoning else f"[thinking] {tip}"
-        reasoning = _truncate_reasoning(reasoning)
+        # 仅保留模型显式给出的简短 reason；内部 reasoning_content 不进入计划或记忆。
+        reasoning = _truncate_reasoning(str(parsed.get("reasoning", "")))
 
         if not agents:
             raise ValueError("LLM 未返回有效 agent")
+
+        if AGENT_RAG in agents and infer_task_type_from_query(query) != "knowledge_qa":
+            result = plan_sub_tasks_clarify(
+                task_input,
+                memory_hits,
+                reason="LLM 建议知识库，但请求缺少明确知识库意图",
+            )
+            result.planner = "clarify_rag_guard"
+            result.raw_llm = raw.content
+            return result
 
         if confidence < settings.MASTER_PLAN_MIN_CONFIDENCE:
             fallback = plan_sub_tasks_keyword(task_input, memory_hits)
@@ -449,7 +502,7 @@ async def plan_sub_tasks_llm(task_input: dict, memory_hits: list[dict]) -> PlanR
     except Exception as exc:
         fallback = plan_sub_tasks_keyword(task_input, memory_hits)
         fallback.planner = "keyword_llm_fallback"
-        fallback.reasoning = f"LLM 规划失败({exc})，回退关键词/知识库兜底"
+        fallback.reasoning = f"LLM 规划失败({exc})，回退关键词路由或请求澄清"
         return fallback
 
 
@@ -460,7 +513,7 @@ def react_decide_rules(
 ) -> ReactDecision:
     """规则 ReAct：Master 只调度 Query / Exec / RAG，SKU 解析在 Query 内部完成。"""
     query = _extract_query(working)
-    suggested = _validate_agents(suggested_agents) or [AGENT_RAG]
+    suggested = _validate_agents(suggested_agents)
     called = {_AGENT_ID_ALIASES.get(o.get("agent"), o.get("agent")) for o in observations}
 
     if observations:
@@ -498,6 +551,14 @@ def react_decide_rules(
             thought=f"{last_agent} 已完成，结束",
             action="finish",
             final_answer=str(summary),
+            source="rules",
+        )
+
+    if not suggested:
+        return ReactDecision(
+            thought="缺少可靠的目标 Agent，需要用户澄清",
+            action="finish",
+            final_answer="请补充您想查询或处理的具体业务内容。",
             source="rules",
         )
 

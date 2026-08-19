@@ -5,6 +5,9 @@ from ecom_agent_matrix.core.skill.skill_registry import register_skill
 
 @register_skill
 class ProfitCalcTool(BaseSkill):
+    read_only = True
+    side_effect = False
+    risk_level = "low"
     skill_name = "profit_calc"
     skill_desc = "跨境独立站利润测算，参数：cost采购价、shipping物流分摊、commission_rate平台佣金、sell_price售价"
 

@@ -13,7 +13,7 @@ def build_reply(
     msg_type: str = "agent_reply",
 ) -> MCPMessage:
     """
-    封装 Agent 回传消息，复用 request.task_id 保证请求-响应一一对应。
+    封装 Agent 回传消息：保留 root task_id，并继承 request.correlation_id。
     """
     body = {
         "type": msg_type,
@@ -27,6 +27,7 @@ def build_reply(
 
     return MCPMessage(
         task_id=request.task_id,
+        correlation_id=request.correlation_id,
         sender=sender,
         target=request.sender,
         priority=request.priority,

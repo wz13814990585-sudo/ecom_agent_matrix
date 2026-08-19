@@ -11,6 +11,7 @@ from ecom_agent_matrix.core.mcp.bus import mcp_bus
 from ecom_agent_matrix.core.mcp.message import MCPMessage
 from ecom_agent_matrix.core.mcp.registry import register_agent
 from ecom_agent_matrix.core.mcp.reply import build_reply
+from ecom_agent_matrix.core.skill.skill_registry import skill_execution_context
 from ecom_agent_matrix.modules.agent_cluster.handlers import (
     handle_ad,
     handle_crm,
@@ -69,16 +70,17 @@ def infer_exec_kind(payload: dict) -> str:
 
 
 async def run_exec(payload: dict, *, task_id: str = "") -> tuple[bool, str, dict]:
-    kind = infer_exec_kind(payload)
-    if kind == "ad":
-        return await handle_ad(payload)
-    if kind == "report":
-        return await handle_report(payload)
-    if kind == "risk":
-        return await handle_risk(payload)
-    if kind == "social":
-        return await handle_social(payload)
-    return await handle_crm(payload, task_id=task_id)
+    with skill_execution_context(AGENT_EXEC):
+        kind = infer_exec_kind(payload)
+        if kind == "ad":
+            return await handle_ad(payload)
+        if kind == "report":
+            return await handle_report(payload)
+        if kind == "risk":
+            return await handle_risk(payload)
+        if kind == "social":
+            return await handle_social(payload)
+        return await handle_crm(payload, task_id=task_id)
 
 
 @register_agent(AGENT_EXEC)

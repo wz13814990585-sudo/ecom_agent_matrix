@@ -41,6 +41,9 @@ def _template_copy(product_name: str, feature: str, platform: str, lang: str) ->
 
 @register_skill
 class SocialMediaCopyTool(BaseSkill):
+    read_only = True
+    side_effect = False
+    risk_level = "low"
     skill_name = "social_media_gen"
     skill_desc = (
         "社媒带货文案生成（LLM），参数 product_name、feature、platform"

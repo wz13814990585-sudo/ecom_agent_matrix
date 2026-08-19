@@ -27,6 +27,9 @@ def _parse_warn_threshold(raw) -> tuple[float | None, str]:
 
 @register_skill
 class CompetitorPriceMonitor(BaseSkill):
+    read_only = True
+    side_effect = False
+    risk_level = "medium"
     skill_name = "price_monitor"
     skill_desc = (
         "竞品价格写入并判定告警，参数 target_sku、competitor、compete_price、"

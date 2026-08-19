@@ -193,6 +193,9 @@ async def _resolve_demo_price(sku: str, competitor: str) -> tuple[float, str, st
 
 @register_skill
 class CompetitorPriceTool(BaseSkill):
+    read_only = True
+    side_effect = False
+    risk_level = "medium"
     skill_name = "competitor_price"
     skill_desc = (
         "竞品价格查询：输入 target_sku + competitor，输出 compete_price；"

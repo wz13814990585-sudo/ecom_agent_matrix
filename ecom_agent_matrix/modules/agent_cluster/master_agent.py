@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 from typing import Any
 
 from ecom_agent_matrix.config.constants import AGENT_MASTER
@@ -77,7 +78,13 @@ def _observation_from_reply(reply: MCPMessage | None, target_agent: str, timed_o
     }
 
 
-async def _dispatch_subtask(task_id: str, target_agent: str, payload: dict, priority: int) -> None:
+async def _dispatch_subtask(
+    task_id: str,
+    correlation_id: str,
+    target_agent: str,
+    payload: dict,
+    priority: int,
+) -> None:
     """限流后向子 Agent 下发单步任务。"""
     sem = _get_subtask_semaphore()
     async with sem:
@@ -85,6 +92,7 @@ async def _dispatch_subtask(task_id: str, target_agent: str, payload: dict, prio
         clean = {k: v for k, v in payload.items() if k not in ("_memory_context",)}
         sub_msg = MCPMessage(
             task_id=task_id,
+            correlation_id=correlation_id,
             sender=AGENT_MASTER,
             target=target_agent,
             priority=priority,
@@ -93,7 +101,12 @@ async def _dispatch_subtask(task_id: str, target_agent: str, payload: dict, prio
         await mcp_bus.send_msg(sub_msg)
         logger.info(
             "subtask_dispatched",
-            extra={"event": "subtask_dispatched", "task_id": task_id, "agent": target_agent},
+            extra={
+                "event": "subtask_dispatched",
+                "task_id": task_id,
+                "correlation_id": correlation_id,
+                "agent": target_agent,
+            },
         )
 
 
@@ -118,9 +131,10 @@ async def _react_call_one(
     priority: int,
 ) -> dict:
     """ReAct 单步：下发一个 Agent → 等待回传 → 返回 observation。"""
-    TaskReplyWaiter.begin(task_id, 1)
-    await _dispatch_subtask(task_id, target_agent, payload, priority)
-    replies = await TaskReplyWaiter.wait(task_id, timeout=float(settings.MCP_TIMEOUT))
+    correlation_id = str(uuid.uuid4())
+    TaskReplyWaiter.begin(correlation_id, 1)
+    await _dispatch_subtask(task_id, correlation_id, target_agent, payload, priority)
+    replies = await TaskReplyWaiter.wait(correlation_id, timeout=float(settings.MCP_TIMEOUT))
     timed_out = len(replies) < 1
     reply = replies[0] if replies else None
     return _observation_from_reply(reply, target_agent, timed_out)
@@ -169,6 +183,41 @@ async def process_master_task(msg: MCPMessage, long_mem: AgentLongVectorMemory) 
         },
     )
 
+    if plan.decision == "clarify":
+        clarification = plan.clarification_question or "请补充您想查询或处理的具体业务内容。"
+        final_result = {
+            "task_id": task_id,
+            "mode": "clarify",
+            "expected": 0,
+            "received": 0,
+            "timed_out": False,
+            "all_success": True,
+            "sub_results": [],
+            "react_trace": [],
+            "summary": clarification,
+            "plan": {
+                "decision": "clarify",
+                "planner": plan.planner,
+                "plan_confidence": plan.plan_confidence,
+                "reasoning": plan.reasoning,
+                "agents": [],
+            },
+        }
+        await mcp_bus.send_msg(
+            build_reply(
+                msg,
+                sender=AGENT_MASTER,
+                success=True,
+                data=final_result,
+                msg_type="master_task_result",
+            )
+        )
+        logger.info(
+            "master_task_clarify",
+            extra={"event": "master_task_clarify", "task_id": task_id},
+        )
+        return
+
     working = dict(plan.sub_tasks[0]["payload"]) if plan.sub_tasks else dict(task_input)
     observations: list[dict] = []
     react_trace: list[dict] = []
@@ -179,12 +228,12 @@ async def process_master_task(msg: MCPMessage, long_mem: AgentLongVectorMemory) 
         react_trace.append(
             {
                 "step": step,
-                "thought": decision.thought,
+                "decision_reason": str(decision.thought or "")[:300],
+                "confidence": decision.confidence,
                 "action": decision.action,
                 "agent": decision.agent,
                 "skill": decision.skill,
                 "source": decision.source,
-                "reasoning_content": decision.reasoning_content or "",
             }
         )
         logger.info(
@@ -200,31 +249,41 @@ async def process_master_task(msg: MCPMessage, long_mem: AgentLongVectorMemory) 
         )
 
         if decision.action == "finish":
-            react_trace[-1]["final_answer"] = decision.final_answer
+            react_trace[-1]["result"] = {"final_answer": decision.final_answer}
             break
 
         if decision.action == "call_skill":
             if not decision.skill:
-                react_trace[-1]["final_answer"] = "call_skill 缺少 skill 名，提前结束"
+                react_trace[-1]["result"] = {
+                    "success": False,
+                    "error_msg": "call_skill 缺少 skill 名，提前结束",
+                }
                 break
             obs = await _react_call_skill(decision.skill, decision.payload)
             observations.append(obs)
             working = merge_observation_into_working(working, obs)
-            react_trace[-1]["observation_success"] = obs.get("success")
-            react_trace[-1]["error_msg"] = obs.get("error_msg", "")
+            react_trace[-1]["result"] = {
+                "success": obs.get("success"),
+                "error_msg": obs.get("error_msg", ""),
+            }
             if not obs.get("success"):
                 break
             continue
 
         if decision.action != "call_agent" or not decision.agent:
-            react_trace[-1]["final_answer"] = "非法 ReAct 动作，提前结束"
+            react_trace[-1]["result"] = {
+                "success": False,
+                "error_msg": "非法 ReAct 动作，提前结束",
+            }
             break
 
         obs = await _react_call_one(task_id, decision.agent, decision.payload, msg.priority)
         observations.append(obs)
         working = merge_observation_into_working(working, obs)
-        react_trace[-1]["observation_success"] = obs.get("success")
-        react_trace[-1]["error_msg"] = obs.get("error_msg", "")
+        react_trace[-1]["result"] = {
+            "success": obs.get("success"),
+            "error_msg": obs.get("error_msg", ""),
+        }
 
         # 关键失败且后续依赖该结果时，规则层会在下一步 finish；此处也可提前跳出
         if obs.get("timed_out"):
@@ -234,9 +293,13 @@ async def process_master_task(msg: MCPMessage, long_mem: AgentLongVectorMemory) 
         react_trace.append(
             {
                 "step": max_steps + 1,
-                "thought": "达到 ReAct 最大步数",
+                "decision_reason": "达到 ReAct 最大步数",
+                "confidence": 1.0,
                 "action": "finish",
-                "final_answer": "达到最大步数，强制结束",
+                "agent": "",
+                "skill": "",
+                "source": "rules",
+                "result": {"final_answer": "达到最大步数，强制结束"},
             }
         )
 
@@ -260,6 +323,7 @@ async def process_master_task(msg: MCPMessage, long_mem: AgentLongVectorMemory) 
         "react_trace": react_trace,
         "working_sku": working.get("sku"),
         "plan": {
+            "decision": plan.decision,
             "planner": plan.planner,
             "plan_confidence": plan.plan_confidence,
             "reasoning": plan.reasoning,

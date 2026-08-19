@@ -6,6 +6,9 @@ from ecom_agent_matrix.db.base import AsyncPGClient
 
 @register_skill
 class StockPredictTool(BaseSkill):
+    read_only = True
+    side_effect = False
+    risk_level = "low"
     skill_name = "stock_predict"
     skill_desc = (
         "商品库存备货预测，参数 sku、predict_days（默认7）、"

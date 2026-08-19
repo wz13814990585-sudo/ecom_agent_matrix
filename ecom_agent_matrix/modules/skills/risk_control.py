@@ -6,6 +6,9 @@ from ecom_agent_matrix.core.skill.skill_registry import register_skill
 
 @register_skill
 class OrderRiskControlTool(BaseSkill):
+    read_only = False
+    side_effect = True
+    risk_level = "high"
     skill_name = "order_risk_check"
     skill_desc = "订单风险识别，参数order_no订单号、total_amount订单总金额、buy_count下单数量"
 

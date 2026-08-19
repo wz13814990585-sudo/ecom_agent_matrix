@@ -74,6 +74,9 @@ async def translate_text(
 
 @register_skill
 class TranslateTool(BaseSkill):
+    read_only = True
+    side_effect = False
+    risk_level = "low"
     skill_name = "text_translate"
     skill_desc = "多语种电商文本翻译（LLM），参数 text / target_lang"
 

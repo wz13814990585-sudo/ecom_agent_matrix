@@ -103,6 +103,9 @@ def wants_full_catalog(text: str) -> bool:
 
 @register_skill
 class GoodsCatalogTool(BaseSkill):
+    read_only = True
+    side_effect = False
+    risk_level = "low"
     skill_name = "goods_catalog"
     skill_desc = (
         "商品目录查询：统计 ecom_goods 数量并列出；"

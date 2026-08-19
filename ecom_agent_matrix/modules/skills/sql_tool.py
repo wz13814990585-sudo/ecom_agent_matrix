@@ -129,6 +129,9 @@ def nl_to_readonly_sql(text: str) -> tuple[str | None, str, str]:
 
 @register_skill
 class SafeSqlQueryTool(BaseSkill):
+    read_only = True
+    side_effect = False
+    risk_level = "medium"
     skill_name = "safe_sql_query"
     skill_desc = (
         "安全只读数据库查询：参数 sql，或用 query/user_query 映射白名单模板；"

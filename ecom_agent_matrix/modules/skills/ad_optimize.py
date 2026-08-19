@@ -110,6 +110,9 @@ def _clamp_pct(val, default: int = 0) -> int:
 
 @register_skill
 class AdOptimizeTool(BaseSkill):
+    read_only = True
+    side_effect = False
+    risk_level = "medium"
     skill_name = "ad_optimize"
     skill_desc = (
         "广告投放优化建议，参数 sku/campaign_id、platform(meta/google/tiktok/amazon)、"

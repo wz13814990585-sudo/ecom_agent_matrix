@@ -11,6 +11,7 @@ from ecom_agent_matrix.core.mcp.bus import mcp_bus
 from ecom_agent_matrix.core.mcp.message import MCPMessage
 from ecom_agent_matrix.core.mcp.registry import register_agent
 from ecom_agent_matrix.core.mcp.reply import build_reply
+from ecom_agent_matrix.core.skill.skill_registry import skill_execution_context
 from ecom_agent_matrix.modules.agent_cluster.handlers import (
     handle_data_check,
     handle_goods,
@@ -92,6 +93,12 @@ async def _ensure_sku(payload: dict) -> tuple[dict, dict | None]:
 
 async def run_query(payload: dict) -> tuple[bool, str, dict]:
     """执行一次只读查询（可供单测直接调用）。"""
+    with skill_execution_context(AGENT_QUERY):
+        return await _run_query_in_context(payload)
+
+
+async def _run_query_in_context(payload: dict) -> tuple[bool, str, dict]:
+    """Query workflow 实现；调用的所有 Skill 继承统一只读上下文。"""
     kind = infer_query_kind(payload)
     if kind == "goods":
         return await handle_goods(payload)

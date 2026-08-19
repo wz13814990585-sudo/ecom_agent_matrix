@@ -4,9 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-
-import torch
-from sentence_transformers import SentenceTransformer
+from typing import Any
 
 from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.db.redis_client import AsyncRedisClient
@@ -28,9 +26,13 @@ def resolve_embed_model_name() -> str:
     return _HF_FALLBACK
 
 
-def get_embed_model() -> SentenceTransformer:
+def get_embed_model() -> Any:
+    """延迟加载重型推理依赖，避免 Agent 注册/规划测试启动模型运行时。"""
     global _embed_model
     if _embed_model is None:
+        import torch
+        from sentence_transformers import SentenceTransformer
+
         device = "cuda" if torch.cuda.is_available() else "cpu"
         name = resolve_embed_model_name()
         _embed_model = SentenceTransformer(name, device=device)

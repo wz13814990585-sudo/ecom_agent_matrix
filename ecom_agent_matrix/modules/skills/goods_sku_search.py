@@ -159,6 +159,9 @@ def _merge_candidates(primary: list[dict], secondary: list[dict], top_k: int) ->
 
 @register_skill
 class GoodsSkuSearchTool(BaseSkill):
+    read_only = True
+    side_effect = False
+    risk_level = "low"
     skill_name = "goods_sku_search"
     skill_desc = (
         "根据中文/英文商品名查候选 SKU："

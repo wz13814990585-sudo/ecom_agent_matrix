@@ -87,6 +87,9 @@ async def retrieve_rag_docs(
 
 @register_skill
 class CrmReplyTool(BaseSkill):
+    read_only = True
+    side_effect = False
+    risk_level = "low"
     skill_name = "crm_reply"
     skill_desc = (
         "客服答复生成：参数 user_query、lang、history、use_rag、taobao_info、"
@@ -124,7 +127,6 @@ class CrmReplyTool(BaseSkill):
                 rag_used = bool(rag_docs)
 
             answer_text = ""
-            reasoning_content = ""
             llm_ok = False
             if is_llm_configured() and not is_fallback_route:
                 try:
@@ -156,7 +158,6 @@ class CrmReplyTool(BaseSkill):
                     )
                     llm_ok = bool(answer.content.strip())
                     answer_text = answer.content
-                    reasoning_content = answer.reasoning_content
                 except Exception as exc:
                     return SkillResult(
                         success=True,
@@ -196,7 +197,6 @@ class CrmReplyTool(BaseSkill):
                     "rag_used": rag_used,
                     "rag_doc_count": len(rag_docs),
                     "rag_error": rag_error,
-                    "reasoning_content": reasoning_content if llm_ok else "",
                 },
             )
         except Exception as exc:
