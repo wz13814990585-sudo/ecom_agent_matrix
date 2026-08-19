@@ -37,6 +37,10 @@ class TaskContext(BaseModel):
 
     params: dict[str, Any] = Field(default_factory=dict)
 
+    def __getitem__(self, key: str) -> Any:
+        """为旧只读调用提供最小 mapping 兼容；新代码应使用 typed 属性。"""
+        return self.to_payload()[key]
+
     def to_payload(self) -> dict[str, Any]:
         """返回兼容旧 Handler 的独立业务 payload，不泄露消息信封字段。"""
         payload = deepcopy(self.params)

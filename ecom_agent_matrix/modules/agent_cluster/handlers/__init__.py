@@ -2,9 +2,10 @@
 from .ad import handle_ad
 from .competitor import handle_price_warn
 from .crm import handle_crm
-from .data_check import handle_data_check, handle_risk
+from .data_check import handle_data_check
 from .goods import handle_goods
 from .report import handle_report
+from .risk import handle_risk
 from .social import handle_social
 from .stock import handle_stock
 

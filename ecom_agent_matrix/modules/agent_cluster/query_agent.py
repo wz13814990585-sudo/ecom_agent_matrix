@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from copy import deepcopy
 
 from ecom_agent_matrix.config.constants import AGENT_QUERY
 from ecom_agent_matrix.config.settings import settings
@@ -24,7 +25,7 @@ from ecom_agent_matrix.modules.agent_cluster.handlers import (
     handle_stock,
 )
 from ecom_agent_matrix.modules.skills.goods_catalog import is_catalog_query
-from ecom_agent_matrix.modules.utils.competitor_parse import extract_sku
+from ecom_agent_matrix.modules.parsers.stock import extract_stock_sku
 
 logger = setup_logger("agent.query")
 
@@ -72,27 +73,27 @@ def infer_query_kind(task: dict | TaskContext) -> str:
     return "goods"
 
 
-async def _ensure_sku(payload: dict) -> tuple[dict, dict | None]:
-    """缺 SKU 时先走商品检索；成功则把 best_sku 写回 payload。"""
-    if extract_sku(payload):
-        return payload, None
-    ok, err, goods_data = await handle_goods(payload)
+async def _ensure_sku(ctx: TaskContext) -> tuple[TaskContext, dict | None]:
+    """缺 SKU 时先走商品检索，并返回新的 TaskContext。"""
+    parsed_sku = extract_stock_sku(ctx)
+    if parsed_sku:
+        return (ctx if ctx.sku == parsed_sku else ctx.with_updates(sku=parsed_sku)), None
+    ok, err, goods_data = await handle_goods(ctx)
     if not ok or not (goods_data or {}).get("best_sku"):
-        return payload, {
+        return ctx, {
             "success": ok,
             "error_msg": err or "未找到匹配商品，无法继续查询",
             "data": {**(goods_data or {}), "query_kind": goods_data.get("query_kind") if goods_data else "goods"},
         }
     sku = goods_data["best_sku"]
-    merged = {
-        **payload,
-        "sku": sku,
-        "best_sku": sku,
-        "target_sku": sku,
-        "candidates": goods_data.get("candidates") or [],
-        "_goods": goods_data,
-    }
-    return merged, None
+    new_params = deepcopy(ctx.params)
+    new_params.update(
+        {
+            "candidates": goods_data.get("candidates") or [],
+            "_goods": goods_data,
+        }
+    )
+    return ctx.with_updates(sku=sku, params=new_params), None
 
 
 async def run_query(task: dict | TaskContext) -> tuple[bool, str, dict]:
@@ -104,26 +105,27 @@ async def run_query(task: dict | TaskContext) -> tuple[bool, str, dict]:
 
 async def _run_query_in_context(ctx: TaskContext) -> tuple[bool, str, dict]:
     """Query workflow 实现；调用的所有 Skill 继承统一只读上下文。"""
-    payload = ctx.to_payload()
     kind = infer_query_kind(ctx)
     if kind == "goods":
-        return await handle_goods(payload)
+        return await handle_goods(ctx)
 
     if kind == "stock":
-        merged, early = await _ensure_sku(payload)
+        enriched, early = await _ensure_sku(ctx)
         if early:
             return early["success"], early["error_msg"], early["data"]
-        return await handle_stock(merged)
+        return await handle_stock(enriched)
 
     if kind == "competitor":
-        merged, early = await _ensure_sku(payload)
+        enriched, early = await _ensure_sku(ctx)
         if early:
             return early["success"], early["error_msg"], early["data"]
-        if not merged.get("competitor") and not merged.get("multi_compare"):
-            merged = {**merged, "multi_compare": True}
-        return await handle_price_warn(merged)
+        if not enriched.competitor and not enriched.params.get("multi_compare"):
+            new_params = deepcopy(enriched.params)
+            new_params["multi_compare"] = True
+            enriched = enriched.with_updates(params=new_params)
+        return await handle_price_warn(enriched)
 
-    return await handle_data_check(payload)
+    return await handle_data_check(ctx)
 
 
 @register_agent(AGENT_QUERY)

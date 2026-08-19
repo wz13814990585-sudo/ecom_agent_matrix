@@ -1,7 +1,6 @@
 """数据校验 workflow；风控写入仍保留原 Exec Handler。"""
 from __future__ import annotations
 
-import asyncio
 import time
 
 from pydantic import ValidationError
@@ -10,10 +9,7 @@ from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.core.skill.skill_registry import exec_skill
 from ecom_agent_matrix.core.tasking import TaskContext, WorkflowResult, ensure_task_context
 from ecom_agent_matrix.core.tasking.result import INVALID_REQUEST, PARTIAL_SUCCESS, SKILL_FAILED
-from ecom_agent_matrix.modules.parsers.data_check import (
-    extract_order_no,
-    parse_data_check_request,
-)
+from ecom_agent_matrix.modules.parsers.data_check import parse_data_check_request
 from ecom_agent_matrix.modules.utils.llm_explain import llm_explain
 
 
@@ -133,59 +129,3 @@ async def run_data_check_workflow(task: dict | TaskContext) -> WorkflowResult:
 
 async def handle_data_check(task: dict | TaskContext) -> tuple[bool, str, dict]:
     return (await run_data_check_workflow(task)).as_legacy_tuple()
-
-
-def _extract_order_no(payload: dict) -> str:
-    """Risk 兼容入口；解析实现已归入 DataCheck domain parser。"""
-    return extract_order_no(ensure_task_context(payload)) or ""
-
-
-async def handle_risk(payload: dict) -> tuple[bool, str, dict]:
-    """写操作：订单风控落库。由 Exec Agent 调用。"""
-    order_no = _extract_order_no(payload)
-    if not order_no:
-        return (
-            False,
-            "触发风控需要订单号 order_no",
-            {"exec_kind": "risk", "order_no": "", "risk": {"skipped": True, "reason": "missing order_no"}},
-        )
-    total_amount = payload.get("total_amount")
-    buy_count = payload.get("buy_count") or payload.get("buy_num")
-    if total_amount is None or buy_count is None:
-        return (
-            False,
-            "风控需要 total_amount 与 buy_count/buy_num",
-            {
-                "exec_kind": "risk",
-                "order_no": order_no,
-                "risk": {"skipped": True, "reason": "风控需要 total_amount 与 buy_count/buy_num"},
-            },
-        )
-    skill_timeout = min(10.0, float(settings.DATA_CHECK_SKILL_TIMEOUT))
-    try:
-        risk_res = await asyncio.wait_for(
-            exec_skill(
-                "order_risk_check",
-                {
-                    "order_no": order_no,
-                    "total_amount": total_amount,
-                    "buy_count": buy_count,
-                },
-            ),
-            timeout=skill_timeout,
-        )
-    except asyncio.TimeoutError:
-        return False, "order_risk_check timeout", {"exec_kind": "risk", "order_no": order_no}
-    return (
-        bool(risk_res.success),
-        risk_res.error_msg or "",
-        {
-            "exec_kind": "risk",
-            "order_no": order_no,
-            "risk": {
-                "success": risk_res.success,
-                "error_msg": risk_res.error_msg,
-                "data": risk_res.data or {},
-            },
-        },
-    )

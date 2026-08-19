@@ -1,112 +1,97 @@
-"""运营报表 handler：生成报表。由 Exec Agent 调用，不是独立 Agent。"""
+"""运营报表 workflow：typed request → ops_report。"""
 from __future__ import annotations
 
-import asyncio
-import re
 import time
 
-from ecom_agent_matrix.config.settings import settings
-from ecom_agent_matrix.core.logging_config import setup_logger
+from pydantic import ValidationError
+
 from ecom_agent_matrix.core.skill.skill_registry import exec_skill
+from ecom_agent_matrix.core.tasking import TaskContext, WorkflowResult, ensure_task_context
+from ecom_agent_matrix.core.tasking.result import (
+    INVALID_REQUEST,
+    SKILL_FAILED,
+    UNSUPPORTED_REPORT_TYPE,
+)
+from ecom_agent_matrix.modules.parsers.report import (
+    UnsupportedReportType,
+    parse_report_request,
+)
 from ecom_agent_matrix.modules.skills.ops_report import SUPPORTED_REPORT_TYPES
 
-logger = setup_logger("agent.report")
 
-_DAYS_PATTERN = re.compile(r"(?:近|最近|last)\s*(\d+)\s*(?:天|日|days?)", re.IGNORECASE)
-
-
-def _extract_report_type(payload: dict) -> str:
-    raw = str(payload.get("report_type") or payload.get("type") or "").strip().lower()
-    if raw in SUPPORTED_REPORT_TYPES:
-        return raw
-    text = str(payload.get("query") or payload.get("user_query") or "").lower()
-    if any(k in text for k in ("销量", "销售", "gmv", "sales")):
-        return "sales"
-    if any(k in text for k in ("库存", "stock", "缺货")):
-        return "stock"
-    if any(k in text for k in ("风控", "风险", "risk")):
-        return "risk"
-    if any(k in text for k in ("完整", "综合", "全量", "full")):
-        return "full"
-    return "daily_ops"
+def _metadata(started: float, **extra) -> dict:
+    return {
+        "workflow": "report",
+        "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+        **extra,
+    }
 
 
-def _extract_days(payload: dict) -> int:
-    if payload.get("days") is not None:
-        try:
-            return int(payload["days"])
-        except (TypeError, ValueError):
-            pass
-    text = str(payload.get("query") or payload.get("user_query") or "")
-    m = _DAYS_PATTERN.search(text)
-    if m:
-        return max(1, min(90, int(m.group(1))))
-    return 7
-
-
-async def handle_report(payload: dict) -> tuple[bool, str, dict]:
-    """运营报表：聚合销售/库存/风控/竞品指标。"""
+async def run_report_workflow(task: dict | TaskContext) -> WorkflowResult:
     started = time.perf_counter()
-    skill_timeout = float(settings.REPORT_SKILL_TIMEOUT)
-    report_type = _extract_report_type(payload)
-    days = _extract_days(payload)
-    top_k = int(payload.get("top_k", 5))
-    lang = str(payload.get("lang") or "zh").strip().lower()
-
-    if report_type not in SUPPORTED_REPORT_TYPES:
-        return (
-            False,
-            f"不支持的 report_type：{report_type}，可选：{', '.join(sorted(SUPPORTED_REPORT_TYPES))}",
-            {"exec_kind": "ops_report", "supported_report_types": sorted(SUPPORTED_REPORT_TYPES)},
-        )
-
+    ctx = ensure_task_context(task)
     try:
-        report_res = await asyncio.wait_for(
-            exec_skill(
-                "ops_report",
-                {
-                    "report_type": report_type,
-                    "days": days,
-                    "top_k": top_k,
-                    "lang": lang,
-                },
+        request = parse_report_request(ctx)
+    except UnsupportedReportType as exc:
+        return WorkflowResult(
+            success=False,
+            error_code=UNSUPPORTED_REPORT_TYPE,
+            error_msg=(
+                f"不支持的 report_type：{exc.report_type}，"
+                f"可选：{', '.join(sorted(SUPPORTED_REPORT_TYPES))}"
             ),
-            timeout=skill_timeout,
+            data={"exec_kind": "ops_report", "supported_report_types": sorted(SUPPORTED_REPORT_TYPES)},
+            metadata=_metadata(started),
         )
-    except asyncio.TimeoutError:
-        return (
-            False,
-            f"ops_report 超时（>{skill_timeout}s）",
-            {"exec_kind": "ops_report", "report_type": report_type, "days": days},
-        )
-
-    elapsed_ms = (time.perf_counter() - started) * 1000
-    if not report_res.success:
-        return (
-            False,
-            report_res.error_msg or "报表生成失败",
-            {
-                "exec_kind": "ops_report",
-                "report_type": report_type,
-                "days": days,
-                "report": report_res.data or {},
-            },
+    except (ValidationError, TypeError, ValueError) as exc:
+        return WorkflowResult(
+            success=False,
+            error_code=INVALID_REQUEST,
+            error_msg=f"报表请求参数不合法：{exc}",
+            data={"exec_kind": "ops_report"},
+            metadata=_metadata(started),
         )
 
-    data = report_res.data or {}
-    return (
-        True,
-        "",
+    report_result = await exec_skill(
+        "ops_report",
         {
+            "report_type": request.report_type,
+            "days": request.days,
+            "top_k": request.top_k,
+            "lang": request.lang,
+        },
+    )
+    if not report_result.success:
+        return WorkflowResult(
+            success=False,
+            error_code=SKILL_FAILED,
+            error_msg=report_result.error_msg or "报表生成失败",
+            data={
+                "exec_kind": "ops_report",
+                "report_type": request.report_type,
+                "days": request.days,
+                "report": report_result.data or {},
+            },
+            metadata=_metadata(started, skill_error_code=report_result.error_code),
+        )
+
+    data = report_result.data or {}
+    return WorkflowResult(
+        success=True,
+        data={
             "exec_kind": "ops_report",
-            "report_type": data.get("report_type", report_type),
-            "days": data.get("days", days),
+            "report_type": data.get("report_type", request.report_type),
+            "days": data.get("days", request.days),
             "summary": data.get("summary", ""),
             "structured": data.get("structured") or {},
             "sections": data.get("sections", {}),
             "source": data.get("source", ""),
-            "lang": data.get("lang", lang),
+            "lang": data.get("lang", request.lang),
             "llm_error": data.get("llm_error"),
-            "latency_ms": round(elapsed_ms, 2),
         },
+        metadata=_metadata(started),
     )
+
+
+async def handle_report(task: dict | TaskContext) -> tuple[bool, str, dict]:
+    return (await run_report_workflow(task)).as_legacy_tuple()

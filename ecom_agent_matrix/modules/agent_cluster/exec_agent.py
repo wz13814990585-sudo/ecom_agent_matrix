@@ -81,21 +81,20 @@ async def run_exec(
     *,
     task_id: str = "",
 ) -> tuple[bool, str, dict]:
-    ctx = ensure_task_context(task)
-    if task_id:
+    ctx = task if isinstance(task, TaskContext) else ensure_task_context(task)
+    if task_id and not isinstance(task, TaskContext):
         ctx = ctx.with_updates(task_id=task_id.strip())
-    payload = ctx.to_payload()
     with skill_execution_context(AGENT_EXEC):
         kind = infer_exec_kind(ctx)
         if kind == "ad":
-            return await handle_ad(payload)
+            return await handle_ad(ctx)
         if kind == "report":
-            return await handle_report(payload)
+            return await handle_report(ctx)
         if kind == "risk":
-            return await handle_risk(payload)
+            return await handle_risk(ctx)
         if kind == "social":
-            return await handle_social(payload)
-        return await handle_crm(payload, task_id=ctx.task_id)
+            return await handle_social(ctx)
+        return await handle_crm(ctx, task_id=ctx.task_id)
 
 
 @register_agent(AGENT_EXEC)

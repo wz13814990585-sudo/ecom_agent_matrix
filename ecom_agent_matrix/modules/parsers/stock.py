@@ -17,13 +17,18 @@ class StockRequest(BaseModel):
     predict_days: int = Field(default=7, ge=1, le=90)
 
 
-def parse_stock_request(task: TaskContext) -> StockRequest:
-    """只从 canonical sku 或 query 中明确的 SKU 格式读取标识。"""
+def extract_stock_sku(task: TaskContext) -> str | None:
+    """只提取 canonical/query SKU，不耦合库存预测参数校验。"""
     sku = task.sku
     if not sku:
         match = _SKU_PATTERN.search(task.query)
         sku = match.group(0).upper() if match else None
+    return sku
+
+
+def parse_stock_request(task: TaskContext) -> StockRequest:
+    """只从 canonical sku 或 query 中明确的 SKU 格式读取标识。"""
     return StockRequest(
-        sku=sku,
+        sku=extract_stock_sku(task),
         predict_days=task.params.get("predict_days", 7),
     )
