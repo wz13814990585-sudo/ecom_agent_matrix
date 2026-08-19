@@ -9,6 +9,7 @@ from typing import Any
 import aiohttp
 
 from ecom_agent_matrix.core.llm.http import get_http_session, with_retry
+from ecom_agent_matrix.core.llm.http import is_retryable
 from ecom_agent_matrix.core.llm.types import (
     ChatMode,
     ChatResult,
@@ -20,6 +21,13 @@ from ecom_agent_matrix.core.llm.types import (
     normalize_mode,
 )
 from ecom_agent_matrix.core.logging_config import setup_logger
+from ecom_agent_matrix.config.settings import settings
+from ecom_agent_matrix.platform.observability.context import (
+    get_trace_context,
+    record_llm_usage,
+)
+from ecom_agent_matrix.platform.observability.metrics import estimate_llm_cost, metrics
+from ecom_agent_matrix.platform.resilience.circuit_breaker import get_circuit_breaker
 
 logger = setup_logger("llm.provider")
 
@@ -152,7 +160,7 @@ class OpenAICompatProvider(LLMProvider):
         return payload
 
     def raise_for_status(self, status: int, body: Any) -> None:
-        msg = f"{self.name} API 错误 {status}: {body}"
+        msg = f"{self.name} API request failed with status {status}"
         if status in (401, 403):
             raise LLMAuthError(msg, status=status, body=body)
         if status == 429:
@@ -208,7 +216,7 @@ class OpenAICompatProvider(LLMProvider):
             raise
         except (KeyError, IndexError, TypeError, AttributeError, ValueError) as exc:
             raise LLMResponseError(
-                f"{self.name} 返回格式异常: {body}", body=body
+                f"{self.name} response format is invalid", body=body
             ) from exc
 
     async def chat(
@@ -220,14 +228,19 @@ class OpenAICompatProvider(LLMProvider):
         mode: ChatMode | str | None = None,
     ) -> ChatResult:
         resolved = self.resolve_mode(mode)
+        breaker = get_circuit_breaker(
+            f"llm:{self.name}",
+            failure_threshold=int(settings.CIRCUIT_FAILURE_THRESHOLD),
+            reset_seconds=float(settings.CIRCUIT_RESET_SECONDS),
+        )
         return await with_retry(
-            lambda: self._chat_once(
+            lambda: breaker.call(lambda: self._chat_once(
                 user_prompt=user_prompt,
                 system_prompt=system_prompt,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 mode=resolved,
-            ),
+            ), is_transient=is_retryable),
             max_retries=int(self.max_retries()),
             base_delay=float(self.retry_base_delay()),
             extra={"provider": self.name, "mode": resolved},
@@ -264,6 +277,12 @@ class OpenAICompatProvider(LLMProvider):
         )
 
         started = time.perf_counter()
+        trace = get_trace_context()
+        purpose = trace.workflow or {
+            "crm_reply": "crm_reply", "ad_optimize": "ad", "ops_report": "report"
+        }.get(trace.skill_name, "other")
+        if purpose not in {"planner", "recovery", "polish", "rag_answer", "crm_reply", "ad", "report"}:
+            purpose = "other"
         session = await get_http_session()
         timeout = aiohttp.ClientTimeout(total=float(self.timeout()))
         try:
@@ -275,7 +294,7 @@ class OpenAICompatProvider(LLMProvider):
                 except Exception as exc:
                     text = await resp.text()
                     raise LLMResponseError(
-                        f"{self.name} 响应非 JSON（status={resp.status}）: {text[:300]}",
+                        f"{self.name} response is not JSON (status={resp.status})",
                         status=resp.status,
                         body=text[:500],
                     ) from exc
@@ -284,12 +303,33 @@ class OpenAICompatProvider(LLMProvider):
                 result = self.parse_result(
                     body if isinstance(body, dict) else {}, model, mode
                 )
+        except asyncio.CancelledError:
+            raise
         except (asyncio.TimeoutError, TimeoutError) as exc:
-            raise LLMServerError(f"{self.name} 请求超时: {exc}", status=504) from exc
+            metrics.observe_llm(self.name, purpose, False, time.perf_counter() - started)
+            record_llm_usage(0, 0, 0, None)
+            raise LLMServerError(f"{self.name} request timed out", status=504) from exc
         except aiohttp.ClientError as exc:
-            raise LLMServerError(f"{self.name} 网络错误: {exc}", status=503) from exc
+            metrics.observe_llm(self.name, purpose, False, time.perf_counter() - started)
+            record_llm_usage(0, 0, 0, None)
+            raise LLMServerError(f"{self.name} dependency unavailable", status=503) from exc
+        except Exception:
+            metrics.observe_llm(self.name, purpose, False, time.perf_counter() - started)
+            record_llm_usage(0, 0, 0, None)
+            raise
 
         latency_ms = (time.perf_counter() - started) * 1000
+        estimated_cost = estimate_llm_cost(
+            self.name, result.model, result.prompt_tokens, result.completion_tokens,
+            settings.LLM_PRICE_TABLE,
+        )
+        metrics.observe_llm(
+            self.name, purpose, True, latency_ms / 1000,
+            result.prompt_tokens, result.completion_tokens, estimated_cost,
+        )
+        record_llm_usage(
+            result.prompt_tokens, result.completion_tokens, result.total_tokens, estimated_cost
+        )
         logger.info(
             "llm_chat_ok",
             extra={
@@ -302,6 +342,7 @@ class OpenAICompatProvider(LLMProvider):
                 "total_tokens": result.total_tokens,
                 "latency_ms": round(latency_ms, 2),
                 "has_reasoning": bool(result.reasoning_content),
+                "estimated_cost_usd": estimated_cost,
             },
         )
         return result

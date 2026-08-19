@@ -17,6 +17,7 @@ from ecom_agent_matrix.modules.agent_cluster.master.policy import (
 from ecom_agent_matrix.modules.agent_cluster.master.prompts import PLANNER_SYSTEM_PROMPT
 from ecom_agent_matrix.modules.agent_cluster.master.schemas import MasterPlan, PlanStep
 from ecom_agent_matrix.modules.agent_cluster.master.telemetry import MasterLLMTelemetry
+from ecom_agent_matrix.platform.observability.context import trace_context
 
 def _query(task_input: dict) -> str:
     return str(
@@ -117,13 +118,14 @@ class TypedMasterPlanner:
             f"{recovery_block}\nReturn a validated dependency plan."
         )
         try:
-            raw = await llm_chat(
-                user_prompt=prompt,
-                system_prompt=PLANNER_SYSTEM_PROMPT,
-                temperature=0.1,
-                max_tokens=int(settings.MASTER_PLAN_MAX_TOKENS),
-                mode=resolve_mode(settings.MASTER_PLAN_MODE),
-            )
+            with trace_context(workflow="planner"):
+                raw = await llm_chat(
+                    user_prompt=prompt,
+                    system_prompt=PLANNER_SYSTEM_PROMPT,
+                    temperature=0.1,
+                    max_tokens=int(settings.MASTER_PLAN_MAX_TOKENS),
+                    mode=resolve_mode(settings.MASTER_PLAN_MODE),
+                )
             telemetry.add_result("planner", raw)
             parsed = _extract_json(raw.content)
             parsed["planner_source"] = "llm"

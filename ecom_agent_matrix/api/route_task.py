@@ -11,11 +11,12 @@ from ecom_agent_matrix.core.security import SecurityContext, authorize_task
 from ecom_agent_matrix.core.security import ApprovalGrant
 from ecom_agent_matrix.core.security.errors import AuthorizationError
 from fastapi import HTTPException, status
+from ecom_agent_matrix.platform.resilience.rate_limit import enforce_business_rate_limit
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 
 
-@router.post("", response_model=ApiResult)
+@router.post("", response_model=ApiResult, dependencies=[Depends(enforce_business_rate_limit)])
 async def create_task(
     body: TaskCreateRequest,
     security: SecurityContext = Depends(get_current_security_context),

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+import time
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -15,6 +16,8 @@ from ecom_agent_matrix.core.mcp.registry import agent_map
 from ecom_agent_matrix.core.mcp.result_waiter import GatewayResultWaiter
 from ecom_agent_matrix.core.security import SecurityContext
 from ecom_agent_matrix.core.security import ApprovalGrant
+from ecom_agent_matrix.platform.observability.context import get_trace_context, update_trace_context
+from ecom_agent_matrix.platform.observability.context import get_performance_summary
 
 
 async def dispatch_and_wait(
@@ -27,13 +30,14 @@ async def dispatch_and_wait(
     approval: ApprovalGrant | None = None,
 ) -> dict[str, Any]:
     """向目标 Agent 发任务并等待最终回传，并生成可读 summary。"""
+    request_started = time.perf_counter()
     if target not in agent_map:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Agent 未注册: {target}",
         )
 
-    task_id = str(uuid.uuid4())
+    task_id = get_trace_context().task_id or str(uuid.uuid4())
     wait_timeout = float(timeout if timeout is not None else settings.API_REQUEST_TIMEOUT)
     GatewayResultWaiter.begin(task_id)
     msg = MCPMessage(
@@ -45,6 +49,7 @@ async def dispatch_and_wait(
         security=security,
         approval=approval,
     )
+    update_trace_context(task_id=task_id, correlation_id=msg.correlation_id)
     try:
         await mcp_bus.send_msg(msg)
         reply = await GatewayResultWaiter.wait(task_id, wait_timeout)
@@ -93,6 +98,10 @@ async def dispatch_and_wait(
         "error_msg": error_msg,
         "msg_type": body.get("type") or "",
         "summary": summary,
+        "performance": {
+            "latency_ms": round((time.perf_counter() - request_started) * 1000, 2),
+            **get_performance_summary(),
+        },
     }
 
 

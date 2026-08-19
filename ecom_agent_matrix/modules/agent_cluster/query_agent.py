@@ -29,6 +29,8 @@ from ecom_agent_matrix.modules.agent_cluster.handlers import (
 )
 from ecom_agent_matrix.modules.parsers.goods import is_catalog_query
 from ecom_agent_matrix.modules.parsers.stock import extract_stock_sku
+from ecom_agent_matrix.platform.observability.context import TraceContext, set_trace_context
+from ecom_agent_matrix.platform.observability.metrics import metrics
 
 logger = setup_logger("agent.query")
 
@@ -106,11 +108,18 @@ async def run_query(
     approval: ApprovalGrant | None = None,
 ) -> tuple[bool, str, dict]:
     """执行一次只读查询（可供单测直接调用）。"""
+    started = time.perf_counter()
     ctx = ensure_task_context(task)
+    set_trace_context(TraceContext.from_identity(
+        task_id=ctx.task_id, correlation_id=ctx.correlation_id,
+        agent_id=AGENT_QUERY, tenant_id=ctx.tenant_id, user_id=ctx.user_id,
+    ))
     with skill_execution_context(
         AGENT_QUERY, task_context=ctx, security=security, approval=approval
     ):
-        return await _run_query_in_context(ctx)
+        result = await _run_query_in_context(ctx)
+    metrics.observe_agent(AGENT_QUERY, result[0], time.perf_counter() - started)
+    return result
 
 
 async def _run_query_in_context(ctx: TaskContext) -> tuple[bool, str, dict]:
@@ -150,6 +159,11 @@ async def query_agent(msg_queue: asyncio.Queue):
     while True:
         msg: MCPMessage = await msg_queue.get()
         started = time.perf_counter()
+        set_trace_context(TraceContext.from_identity(
+            task_id=msg.task_id, correlation_id=msg.correlation_id, agent_id=AGENT_QUERY,
+            tenant_id=getattr(msg.security, "tenant_id", ""),
+            user_id=getattr(msg.security, "user_id", ""),
+        ))
         try:
             require_trusted_ingress(msg.security, app_env=settings.APP_ENV)
             async with sem:
@@ -180,7 +194,7 @@ async def query_agent(msg_queue: asyncio.Queue):
                         "event": "query_task_done",
                         "task_id": msg.task_id,
                         "agent": AGENT_QUERY,
-                        "query": data.get("query_kind") or "",
+                        "workflow": data.get("query_kind") or "",
                         "latency_ms": round(elapsed_ms, 2),
                     },
                 )

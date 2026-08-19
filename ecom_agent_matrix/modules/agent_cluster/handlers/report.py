@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 
 from pydantic import ValidationError
+from ecom_agent_matrix.platform.observability.metrics import observed_workflow
 
 from ecom_agent_matrix.core.skill.skill_registry import exec_skill
 from ecom_agent_matrix.core.tasking import TaskContext, WorkflowResult, ensure_task_context
@@ -27,6 +28,7 @@ def _metadata(started: float, **extra) -> dict:
     }
 
 
+@observed_workflow("report")
 async def run_report_workflow(task: dict | TaskContext) -> WorkflowResult:
     started = time.perf_counter()
     ctx = ensure_task_context(task)

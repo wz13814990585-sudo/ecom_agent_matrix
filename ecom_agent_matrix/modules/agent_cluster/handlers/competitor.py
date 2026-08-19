@@ -5,6 +5,7 @@ import asyncio
 import time
 
 from pydantic import ValidationError
+from ecom_agent_matrix.platform.observability.metrics import observed_workflow
 
 from ecom_agent_matrix.config.constants import AGENT_QUERY
 from ecom_agent_matrix.config.settings import settings
@@ -165,6 +166,7 @@ async def _run_multi_compare(
     )
 
 
+@observed_workflow("competitor")
 async def run_competitor_workflow(task: dict | TaskContext) -> WorkflowResult:
     started = time.perf_counter()
     ctx = ensure_task_context(task)

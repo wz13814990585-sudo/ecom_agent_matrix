@@ -11,6 +11,7 @@ from ecom_agent_matrix.core.security import SecurityContext, authorize_task
 from ecom_agent_matrix.core.security import ApprovalGrant
 from ecom_agent_matrix.core.security.errors import AuthorizationError
 from fastapi import HTTPException, status
+from ecom_agent_matrix.platform.resilience.rate_limit import enforce_business_rate_limit
 
 router = APIRouter(
     prefix="/api/v1/customer",
@@ -18,7 +19,7 @@ router = APIRouter(
 )
 
 
-@router.post("/chat", response_model=ApiResult)
+@router.post("/chat", response_model=ApiResult, dependencies=[Depends(enforce_business_rate_limit)])
 async def customer_chat(
     body: CustomerChatRequest,
     security: SecurityContext = Depends(get_current_security_context),

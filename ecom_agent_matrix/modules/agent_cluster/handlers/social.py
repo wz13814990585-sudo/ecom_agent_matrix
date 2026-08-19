@@ -5,6 +5,7 @@ import asyncio
 import time
 
 from pydantic import ValidationError
+from ecom_agent_matrix.platform.observability.metrics import observed_workflow
 
 from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.core.rate_limit import acquire_slot
@@ -37,6 +38,7 @@ def _metadata(started: float, **extra) -> dict:
     }
 
 
+@observed_workflow("social")
 async def run_social_workflow(task: dict | TaskContext) -> WorkflowResult:
     """解析请求，在 workflow deadline 内并发生成文案和绘图提示词。"""
     started = time.perf_counter()

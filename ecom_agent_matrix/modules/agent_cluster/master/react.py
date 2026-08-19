@@ -13,6 +13,7 @@ from ecom_agent_matrix.modules.agent_cluster.master.schemas import (
     RecoveryDecision,
 )
 from ecom_agent_matrix.modules.agent_cluster.master.telemetry import MasterLLMTelemetry
+from ecom_agent_matrix.platform.observability.context import trace_context
 
 _RECOVERABLE = frozenset({"TIMEOUT", "AGENT_FAILED", "STEP_EXECUTION_ERROR"})
 
@@ -52,13 +53,14 @@ class RecoveryController:
                     action="finish", reason_code="LLM_BUDGET_EXCEEDED"
                 )
             try:
-                raw = await llm_chat(
-                    user_prompt=f"Failed plan steps:\n{json.dumps(compact, ensure_ascii=False)}",
-                    system_prompt=RECOVERY_SYSTEM_PROMPT,
-                    temperature=0.1,
-                    max_tokens=int(settings.MASTER_REACT_MAX_TOKENS),
-                    mode=resolve_mode(settings.MASTER_REACT_MODE),
-                )
+                with trace_context(workflow="recovery"):
+                    raw = await llm_chat(
+                        user_prompt=f"Failed plan steps:\n{json.dumps(compact, ensure_ascii=False)}",
+                        system_prompt=RECOVERY_SYSTEM_PROMPT,
+                        temperature=0.1,
+                        max_tokens=int(settings.MASTER_REACT_MAX_TOKENS),
+                        mode=resolve_mode(settings.MASTER_REACT_MODE),
+                    )
                 telemetry.add_result("recovery", raw)
                 parsed = json.loads(raw.content)
                 decision = RecoveryDecision.model_validate(parsed)

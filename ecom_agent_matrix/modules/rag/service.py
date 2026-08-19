@@ -22,6 +22,7 @@ from ecom_agent_matrix.modules.rag.schemas import (
 )
 from ecom_agent_matrix.modules.utils.llm_explain import llm_explain
 from ecom_agent_matrix.core.security import TenantScope, require_tenant_scope
+from ecom_agent_matrix.platform.observability.context import trace_context
 
 logger = setup_logger("rag.service")
 INVALID_REQUEST = "INVALID_REQUEST"
@@ -178,16 +179,17 @@ class RAGService:
             else f"Based on the retrieved knowledge:\n{context}"
         )
         try:
-            answer, source, generation_error = await llm_explain(
-                system_prompt=RAG_ANSWER_SYSTEM,
-                user_prompt=(
-                    f"Language: {typed.lang}\nUser question: {typed.query}\n\n"
-                    f"Documents:\n{context}\n\nAnswer only from these documents with citations."
-                ),
-                fallback=fallback,
-                max_tokens=int(settings.AGENT_LLM_EXPLAIN_MAX_TOKENS),
-                temperature=0.2,
-            )
+            with trace_context(workflow="rag_answer"):
+                answer, source, generation_error = await llm_explain(
+                    system_prompt=RAG_ANSWER_SYSTEM,
+                    user_prompt=(
+                        f"Language: {typed.lang}\nUser question: {typed.query}\n\n"
+                        f"Documents:\n{context}\n\nAnswer only from these documents with citations."
+                    ),
+                    fallback=fallback,
+                    max_tokens=int(settings.AGENT_LLM_EXPLAIN_MAX_TOKENS),
+                    temperature=0.2,
+                )
         except Exception as exc:
             logger.error(
                 "rag_service_generation_failed",

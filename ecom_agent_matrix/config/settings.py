@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 # 项目根目录（.../跨境独立站电商自动化运营多智能体矩阵）
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -36,6 +37,7 @@ class Settings(BaseSettings):
     REDIS_PORT: int = 6379
     REDIS_DB: int = 0
     REDIS_PASSWORD: str = ""  # 空=无密码（仅本地）；生产务必设置
+    REDIS_SOCKET_TIMEOUT_SECONDS: float = 3.0
 
     # 短记忆（CRM 会话）：滑动窗口 + Redis List 并发安全 append
     SHORT_MEMORY_TTL: int = 3600
@@ -45,6 +47,8 @@ class Settings(BaseSettings):
     LLM_MODEL_PATH: str = "./models/Qwen-7B"
     EMBED_MODEL_PATH: str = "./models/bge-small-en-v1.5"
     RERANK_MODEL_PATH: str = "./models/bge-reranker-base"
+    EMBEDDING_TIMEOUT_SECONDS: float = 30.0
+    RERANK_TIMEOUT_SECONDS: float = 15.0
 
     # LLM 路由（架构层；具体供应商只是实现）
     LLM_PROVIDER: str = "deepseek"  # deepseek | openai
@@ -52,6 +56,9 @@ class Settings(BaseSettings):
     LLM_TIMEOUT: float = 60.0
     LLM_MAX_RETRIES: int = 2  # 429/503/网络超时额外重试次数
     LLM_RETRY_BASE_DELAY: float = 0.8  # 指数退避基数（秒）
+    LLM_PRICE_TABLE: dict = Field(default_factory=dict)
+    CIRCUIT_FAILURE_THRESHOLD: int = 5
+    CIRCUIT_RESET_SECONDS: float = 30.0
 
     # DeepSeek
     DEEPSEEK_API_KEY: str = ""
@@ -169,6 +176,13 @@ class Settings(BaseSettings):
     APPROVAL_TTL_SECONDS: int = 600
     API_REQUEST_TIMEOUT: float = 90.0
     API_SENDER: str = "api_gateway"
+    METRICS_AUTH_REQUIRED: bool = False
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_REQUESTS: int = 60
+    RATE_LIMIT_WINDOW_SECONDS: int = 60
+    LLM_REQUIRED_FOR_READINESS: bool = False
+    SHUTDOWN_TIMEOUT_SECONDS: float = 10.0
+    DEBUG_TRACE_ENABLED: bool = False
 
     # 最终结果 LLM 整理（API summary / Master 可读摘要）
     OUTPUT_POLISH_ENABLED: bool = True

@@ -10,11 +10,12 @@ from ecom_agent_matrix.config.constants import AGENT_QUERY, MSG_PRIORITY_RISK
 from ecom_agent_matrix.core.security import SecurityContext, authorize_task
 from ecom_agent_matrix.core.security import ApprovalGrant
 from ecom_agent_matrix.core.security.errors import AuthorizationError
+from ecom_agent_matrix.platform.resilience.rate_limit import enforce_business_rate_limit
 
 router = APIRouter(prefix="/api/v1/warn", tags=["warn"])
 
 
-@router.post("/competitor", response_model=ApiResult)
+@router.post("/competitor", response_model=ApiResult, dependencies=[Depends(enforce_business_rate_limit)])
 async def competitor_warn(
     body: CompetitorWarnRequest,
     security: SecurityContext = Depends(get_current_security_context),

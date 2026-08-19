@@ -27,6 +27,8 @@ from ecom_agent_matrix.modules.agent_cluster.handlers import (
     handle_risk,
     handle_social,
 )
+from ecom_agent_matrix.platform.observability.context import TraceContext, set_trace_context
+from ecom_agent_matrix.platform.observability.metrics import metrics
 
 logger = setup_logger("agent.exec")
 
@@ -86,22 +88,30 @@ async def run_exec(
     security: SecurityContext | None = None,
     approval: ApprovalGrant | None = None,
 ) -> tuple[bool, str, dict]:
+    started = time.perf_counter()
     ctx = task if isinstance(task, TaskContext) else ensure_task_context(task)
     if task_id and not isinstance(task, TaskContext):
         ctx = ctx.with_updates(task_id=task_id.strip())
+    set_trace_context(TraceContext.from_identity(
+        task_id=ctx.task_id, correlation_id=ctx.correlation_id,
+        agent_id=AGENT_EXEC, tenant_id=ctx.tenant_id, user_id=ctx.user_id,
+    ))
     with skill_execution_context(
         AGENT_EXEC, task_context=ctx, security=security, approval=approval
     ):
         kind = infer_exec_kind(ctx)
         if kind == "ad":
-            return await handle_ad(ctx)
-        if kind == "report":
-            return await handle_report(ctx)
-        if kind == "risk":
-            return await handle_risk(ctx)
-        if kind == "social":
-            return await handle_social(ctx)
-        return await handle_crm(ctx, task_id=ctx.task_id)
+            result = await handle_ad(ctx)
+        elif kind == "report":
+            result = await handle_report(ctx)
+        elif kind == "risk":
+            result = await handle_risk(ctx)
+        elif kind == "social":
+            result = await handle_social(ctx)
+        else:
+            result = await handle_crm(ctx, task_id=ctx.task_id)
+    metrics.observe_agent(AGENT_EXEC, result[0], time.perf_counter() - started)
+    return result
 
 
 @register_agent(AGENT_EXEC)
@@ -116,6 +126,11 @@ async def exec_agent(msg_queue: asyncio.Queue):
     while True:
         msg: MCPMessage = await msg_queue.get()
         started = time.perf_counter()
+        set_trace_context(TraceContext.from_identity(
+            task_id=msg.task_id, correlation_id=msg.correlation_id, agent_id=AGENT_EXEC,
+            tenant_id=getattr(msg.security, "tenant_id", ""),
+            user_id=getattr(msg.security, "user_id", ""),
+        ))
         try:
             require_trusted_ingress(msg.security, app_env=settings.APP_ENV)
             async with sem:
@@ -146,7 +161,7 @@ async def exec_agent(msg_queue: asyncio.Queue):
                         "event": "exec_task_done",
                         "task_id": msg.task_id,
                         "agent": AGENT_EXEC,
-                        "query": data.get("exec_kind") or "",
+                        "workflow": data.get("exec_kind") or "",
                         "latency_ms": round(elapsed_ms, 2),
                     },
                 )

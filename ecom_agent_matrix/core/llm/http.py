@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import asyncio
-import random
 from typing import Any
 
 import aiohttp
 
 from ecom_agent_matrix.core.llm.types import LLMRateLimitError, LLMServerError
 from ecom_agent_matrix.core.logging_config import setup_logger
+from ecom_agent_matrix.platform.observability.metrics import metrics
+from ecom_agent_matrix.platform.resilience.retry import RetryPolicy
 
 logger = setup_logger("llm.http")
 
@@ -59,27 +60,32 @@ async def with_retry(
     对可重试异常做指数退避（含少量抖动）。
     coro_factory: 无参异步可调用，每次重试重新发起请求。
     """
-    last_exc: BaseException | None = None
-    attempts = max(1, max_retries + 1)
-    for attempt in range(attempts):
-        try:
-            return await coro_factory()
-        except Exception as exc:
-            last_exc = exc
-            if not is_retryable(exc) or attempt >= attempts - 1:
-                raise
-            delay = base_delay * (2**attempt) + random.uniform(0, 0.25)
-            payload = {
-                "event": "llm_retry",
-                "attempt": attempt + 1,
-                "max_retries": max_retries,
-                "delay_s": round(delay, 3),
-                "error": str(exc),
-                "status": getattr(exc, "status", None),
-            }
-            if extra:
-                payload.update(extra)
-            logger.warning("llm_retry", extra=payload)
-            await asyncio.sleep(delay)
-    assert last_exc is not None
-    raise last_exc
+    component = str((extra or {}).get("provider") or "llm")
+
+    def on_retry(exc: BaseException, attempt: int, delay: float) -> None:
+        reason = (
+            "429" if isinstance(exc, LLMRateLimitError)
+            else "timeout" if isinstance(exc, (asyncio.TimeoutError, TimeoutError))
+            else "connection" if isinstance(exc, aiohttp.ClientError)
+            else "5xx"
+        )
+        metrics.external_retries.labels(f"llm:{component}", reason).inc()
+        payload = {
+            "event": "llm_retry",
+            "attempt": attempt,
+            "max_retries": max_retries,
+            "delay_s": round(delay, 3),
+            "error_type": type(exc).__name__,
+            "component": f"llm:{component}",
+            "status": getattr(exc, "status", None),
+        }
+        if extra:
+            payload.update(extra)
+        logger.warning("llm_retry", extra=payload)
+
+    return await RetryPolicy(
+        max_attempts=max(1, int(max_retries) + 1),
+        base_delay_seconds=float(base_delay),
+        max_delay_seconds=max(float(base_delay), float(base_delay) * 4),
+        jitter_seconds=0.25,
+    ).run(coro_factory, retry_if=is_retryable, on_retry=on_retry)

@@ -12,6 +12,7 @@ from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.core.security import SecurityConfigurationError, SecurityContext
 from ecom_agent_matrix.core.security import ApprovalGrant
 from ecom_agent_matrix.core.security.approval import approval_service
+from ecom_agent_matrix.platform.observability.context import identity_hash, update_trace_context
 
 
 def _items(value: Any) -> frozenset[str]:
@@ -126,14 +127,20 @@ async def get_current_security_context(
 ) -> SecurityContext:
     mode = str(settings.AUTH_MODE or "").strip().lower()
     if mode == "api_key":
-        return authenticate_api_key(x_api_key)
-    if mode == "jwt":
+        security = authenticate_api_key(x_api_key)
+    elif mode == "jwt":
         prefix, _, token = str(authorization or "").partition(" ")
-        return authenticate_jwt(token.strip() if prefix.lower() == "bearer" else "")
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Authentication is not configured",
+        security = authenticate_jwt(token.strip() if prefix.lower() == "bearer" else "")
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication is not configured",
+        )
+    update_trace_context(
+        tenant_hash=identity_hash(security.tenant_id),
+        user_hash=identity_hash(security.user_id),
     )
+    return security
 
 
 async def require_api_key(

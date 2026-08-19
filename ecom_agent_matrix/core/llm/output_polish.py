@@ -10,6 +10,7 @@ from ecom_agent_matrix.core.llm.types import ChatResult
 from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.core.llm.router import is_llm_configured, llm_chat
 from ecom_agent_matrix.core.logging_config import setup_logger
+from ecom_agent_matrix.platform.observability.context import trace_context
 
 logger = setup_logger("llm.output_polish")
 
@@ -183,13 +184,14 @@ async def polish_final_output(
             return _heuristic_summary(
                 success=success, data=payload, error_msg=error_msg, reply_from=reply_from
             )
-        text = await llm_chat(
-            user_prompt=user_prompt,
-            system_prompt=_SYSTEM_PROMPT,
-            temperature=0.2,
-            max_tokens=settings.OUTPUT_POLISH_MAX_TOKENS,
-            mode="chat",
-        )
+        with trace_context(workflow="polish"):
+            text = await llm_chat(
+                user_prompt=user_prompt,
+                system_prompt=_SYSTEM_PROMPT,
+                temperature=0.2,
+                max_tokens=settings.OUTPUT_POLISH_MAX_TOKENS,
+                mode="chat",
+            )
         if on_provider_result is not None:
             on_provider_result(text)
         if text.content.strip():
@@ -197,7 +199,7 @@ async def polish_final_output(
     except Exception as exc:
         logger.warning(
             "output_polish_failed",
-            extra={"event": "output_polish_failed", "error": str(exc)},
+            extra={"event": "output_polish_failed", "error_type": type(exc).__name__},
         )
 
     return _heuristic_summary(

@@ -150,3 +150,4 @@ class ApiResult(BaseModel):
         default="",
         description="LLM 整理后的可读中文摘要；关闭 OUTPUT_POLISH 时为启发式文案",
     )
+    performance: dict[str, Any] = Field(default_factory=dict)

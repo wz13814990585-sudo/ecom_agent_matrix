@@ -17,6 +17,8 @@ from ecom_agent_matrix.modules.rag.schemas import RAGRequest
 from ecom_agent_matrix.modules.rag.service import rag_service
 from ecom_agent_matrix.core.security import require_trusted_ingress
 from ecom_agent_matrix.core.security import tenant_scope_from_security
+from ecom_agent_matrix.platform.observability.context import TraceContext, set_trace_context
+from ecom_agent_matrix.platform.observability.metrics import metrics
 
 logger = setup_logger("rag.agent")
 
@@ -34,6 +36,11 @@ async def rag_agent(msg_queue: asyncio.Queue):
     while True:
         msg: MCPMessage = await msg_queue.get()
         started = time.perf_counter()
+        set_trace_context(TraceContext.from_identity(
+            task_id=msg.task_id, correlation_id=msg.correlation_id, agent_id=AGENT_RAG,
+            workflow="rag_answer", tenant_id=getattr(msg.security, "tenant_id", ""),
+            user_id=getattr(msg.security, "user_id", ""),
+        ))
         query = ""
         lang = "en"
         try:
@@ -76,6 +83,7 @@ async def rag_agent(msg_queue: asyncio.Queue):
                 candidate_counts=result.candidate_counts,
             )
             await mcp_bus.send_msg(reply)
+            metrics.observe_agent(AGENT_RAG, result.success, time.perf_counter() - started)
             logger.info(
                 "rag_task_done",
                 extra={
@@ -89,6 +97,7 @@ async def rag_agent(msg_queue: asyncio.Queue):
                 },
             )
         except (ValidationError, TypeError, ValueError) as exc:
+            metrics.observe_agent(AGENT_RAG, False, time.perf_counter() - started)
             elapsed = round((time.perf_counter() - started) * 1000, 2)
             await mcp_bus.send_msg(
                 build_rag_reply(
@@ -115,6 +124,7 @@ async def rag_agent(msg_queue: asyncio.Queue):
                 },
             )
         except Exception as exc:
+            metrics.observe_agent(AGENT_RAG, False, time.perf_counter() - started)
             elapsed = round((time.perf_counter() - started) * 1000, 2)
             await mcp_bus.send_msg(
                 build_rag_reply(

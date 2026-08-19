@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import math
 from typing import Any
+from ecom_agent_matrix.config.settings import settings
 
 from ecom_agent_matrix.modules.rag.hallucination_check import (
     KEYWORD_WEIGHT,
@@ -42,10 +43,13 @@ async def rerank_documents_detailed(
             (query, str(candidate.get("chunk_text") or ""))
             for candidate in candidates
         ]
-        raw_scores = await asyncio.to_thread(
-            model.predict,
-            pairs,
-            show_progress_bar=False,
+        raw_scores = await asyncio.wait_for(
+            asyncio.to_thread(
+                model.predict,
+                pairs,
+                show_progress_bar=False,
+            ),
+            timeout=float(settings.RERANK_TIMEOUT_SECONDS),
         )
         semantic_scores = [_sigmoid(float(score)) for score in raw_scores]
         if len(semantic_scores) != len(candidates):

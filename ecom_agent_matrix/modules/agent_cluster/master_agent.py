@@ -6,6 +6,7 @@ import json
 import re
 import time
 import uuid
+import hashlib
 from typing import Any
 
 from ecom_agent_matrix.config.constants import AGENT_MASTER
@@ -25,6 +26,8 @@ from ecom_agent_matrix.core.security import (
     require_trusted_ingress,
 )
 from ecom_agent_matrix.core.security.errors import AuthorizationError
+from ecom_agent_matrix.platform.observability.context import TraceContext, set_trace_context
+from ecom_agent_matrix.platform.observability.metrics import metrics
 from ecom_agent_matrix.modules.agent_cluster.master.executor import MasterPlanExecutor
 from ecom_agent_matrix.modules.agent_cluster.master.planner import typed_master_planner
 from ecom_agent_matrix.modules.agent_cluster.master.react import recovery_controller
@@ -532,7 +535,8 @@ async def process_master_task(msg: MCPMessage, long_mem: AgentLongVectorMemory) 
             "event": "master_task_received",
             "task_id": task_id,
             "task_type": task_descriptor["task_type"],
-            "query": task_descriptor["query"][:200],
+            "query_hash": hashlib.sha256(task_descriptor["query"].encode("utf-8")).hexdigest()[:16],
+            "query_length": len(task_descriptor["query"]),
             **security_log_fields(msg.security),
         },
     )
@@ -626,9 +630,17 @@ async def safe_process_master_task(
     long_mem: AgentLongVectorMemory,
 ) -> None:
     """限制用户级并发，并保证未捕获异常也向 Gateway 回传。"""
+    started = time.perf_counter()
+    success = False
+    set_trace_context(TraceContext.from_identity(
+        task_id=msg.task_id, correlation_id=msg.correlation_id, agent_id=AGENT_MASTER,
+        tenant_id=getattr(msg.security, "tenant_id", ""),
+        user_id=getattr(msg.security, "user_id", ""),
+    ))
     try:
         async with _get_master_task_semaphore():
             await process_master_task(msg, long_mem)
+            success = True
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -673,6 +685,8 @@ async def safe_process_master_task(
                     "error_type": type(reply_exc).__name__,
                 },
             )
+    finally:
+        metrics.observe_agent(AGENT_MASTER, success, time.perf_counter() - started)
 
 
 def _consume_master_task(task: asyncio.Task) -> None:
@@ -702,6 +716,15 @@ def _track_master_task(
     _master_tasks.add(task)
     task.add_done_callback(_consume_master_task)
     return task
+
+
+async def cancel_master_tasks() -> None:
+    """Cancel and consume every Master-owned background request during shutdown."""
+    tasks = list(_master_tasks)
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @register_agent(AGENT_MASTER)

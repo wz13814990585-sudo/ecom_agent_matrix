@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 
 from pydantic import ValidationError
+from ecom_agent_matrix.platform.observability.metrics import observed_workflow
 
 from ecom_agent_matrix.core.logging_config import setup_logger
 from ecom_agent_matrix.core.skill.skill_registry import exec_skill
@@ -22,6 +23,7 @@ def _metadata(started: float, **extra) -> dict:
     }
 
 
+@observed_workflow("goods")
 async def run_goods_workflow(task: dict | TaskContext) -> WorkflowResult:
     """解析商品请求并编排一个商品 Skill。"""
     started = time.perf_counter()

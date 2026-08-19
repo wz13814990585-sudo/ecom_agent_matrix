@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 
 from pydantic import ValidationError
+from ecom_agent_matrix.platform.observability.metrics import observed_workflow
 
 from ecom_agent_matrix.config.constants import AGENT_EXEC
 from ecom_agent_matrix.core.memory.long_vector_memory import AgentLongVectorMemory
@@ -40,6 +41,7 @@ def _metadata(started: float, **extra) -> dict:
     }
 
 
+@observed_workflow("ad")
 async def run_ad_workflow(task: dict | TaskContext) -> WorkflowResult:
     started = time.perf_counter()
     ctx = ensure_task_context(task)

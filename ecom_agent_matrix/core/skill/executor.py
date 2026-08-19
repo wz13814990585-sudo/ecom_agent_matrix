@@ -26,6 +26,8 @@ from ecom_agent_matrix.core.security.approval import (
 )
 from ecom_agent_matrix.core.security.audit import record_audit_event
 from ecom_agent_matrix.core.security.scope import TenantScope
+from ecom_agent_matrix.platform.observability.context import update_trace_context
+from ecom_agent_matrix.platform.observability.metrics import metrics
 
 SKILL_NOT_FOUND = "SKILL_NOT_FOUND"
 PERMISSION_DENIED = "PERMISSION_DENIED"
@@ -49,6 +51,7 @@ class SkillExecutor:
         context: SkillExecutionContext | None = None,
     ) -> SkillResult:
         started = time.perf_counter()
+        update_trace_context(skill_name=skill_name)
         effective_context = context or current_skill_execution_context()
         skill_cls = lookup_skill(skill_name)
 
@@ -334,6 +337,12 @@ class SkillExecutor:
 
     @staticmethod
     def _log_result(result: SkillResult) -> None:
+        metrics.observe_skill(
+            str(result.metadata.get("skill_name") or "unknown"),
+            result.success,
+            result.error_code,
+            float(result.metadata.get("latency_ms") or 0) / 1000,
+        )
         logger.info(
             "skill_execution_done",
             extra={

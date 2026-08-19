@@ -1,8 +1,15 @@
 """结构化日志配置。"""
 import json
 import logging
+import traceback
 from datetime import datetime, timezone
 from typing import Any
+
+from ecom_agent_matrix.platform.observability.context import get_trace_context
+from ecom_agent_matrix.platform.observability.logging import (
+    sanitize_log_fields,
+    sanitize_message,
+)
 
 
 class JsonFormatter(logging.Formatter):
@@ -13,19 +20,31 @@ class JsonFormatter(logging.Formatter):
             "ts": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            "message": sanitize_message(record.getMessage()),
         }
+        trace = get_trace_context()
+        trace_fields = {
+            "task_id": trace.task_id,
+            "correlation_id": trace.correlation_id,
+            "agent": trace.agent_id,
+            "workflow": trace.workflow,
+            "skill": trace.skill_name,
+            "tenant_hash": trace.tenant_hash,
+            "user_hash": trace.user_hash,
+        }
+        payload.update({key: value for key, value in trace_fields.items() if value})
         # 业务字段通过 logger.info(..., extra={...}) 传入
         for key in (
             "task_id",
-            "query",
+            "correlation_id",
+            "query_hash",
+            "query_length",
             "lang",
             "recall_count",
             "latency_ms",
             "cached",
             "agent",
             "event",
-            "error",
             "model",
             "mode",
             "requested",
@@ -40,11 +59,23 @@ class JsonFormatter(logging.Formatter):
             "delay_s",
             "status",
             "provider",
+            "method",
+            "route",
+            "status_class",
+            "workflow",
+            "skill",
+            "error_code",
+            "component",
+            "estimated_cost_usd",
         ):
             if hasattr(record, key):
-                payload[key] = getattr(record, key)
+                payload.update(sanitize_log_fields({key: getattr(record, key)}))
         if record.exc_info:
-            payload["exception"] = self.formatException(record.exc_info)
+            payload["exception_type"] = record.exc_info[0].__name__
+            payload["stack"] = [
+                f"{frame.filename}:{frame.lineno}:{frame.name}"
+                for frame in traceback.extract_tb(record.exc_info[2])[-12:]
+            ]
         return json.dumps(payload, ensure_ascii=False)
 
 

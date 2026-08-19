@@ -59,8 +59,12 @@ async def get_text_embedding(text: str) -> list[float]:
             "embedding_cache_read_failed",
             extra={"event": "embedding_cache_read_failed", "error_type": type(exc).__name__},
         )
-    model = get_embed_model()
-    vec = await asyncio.to_thread(model.encode, text)
+    model = await asyncio.wait_for(
+        asyncio.to_thread(get_embed_model), timeout=float(settings.EMBEDDING_TIMEOUT_SECONDS)
+    )
+    vec = await asyncio.wait_for(
+        asyncio.to_thread(model.encode, text), timeout=float(settings.EMBEDDING_TIMEOUT_SECONDS)
+    )
     vec = vec.tolist()
     try:
         if redis is None:
@@ -85,10 +89,14 @@ async def get_text_embeddings_batch(texts: list[str], batch_size: int = 32) -> l
     """批量向量化（跳过 Redis，适合回填脚本）。"""
     if not texts:
         return []
-    model = get_embed_model()
+    model = await asyncio.wait_for(
+        asyncio.to_thread(get_embed_model), timeout=float(settings.EMBEDDING_TIMEOUT_SECONDS)
+    )
 
     def _encode():
         arr = model.encode(texts, batch_size=batch_size, show_progress_bar=False)
         return [row.tolist() for row in arr]
 
-    return await asyncio.to_thread(_encode)
+    return await asyncio.wait_for(
+        asyncio.to_thread(_encode), timeout=float(settings.EMBEDDING_TIMEOUT_SECONDS)
+    )

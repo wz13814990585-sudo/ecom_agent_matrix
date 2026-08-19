@@ -15,6 +15,8 @@ class AsyncRedisClient:
                 "port": settings.REDIS_PORT,
                 "db": settings.REDIS_DB,
                 "decode_responses": True,
+                "socket_timeout": float(settings.REDIS_SOCKET_TIMEOUT_SECONDS),
+                "socket_connect_timeout": float(settings.REDIS_SOCKET_TIMEOUT_SECONDS),
             }
             pwd = (settings.REDIS_PASSWORD or "").strip()
             if pwd:

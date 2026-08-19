@@ -1,6 +1,8 @@
 """Agent 侧 LLM 解读层：只生成说明文案，不参与数值计算 / 阈值判定。"""
 from __future__ import annotations
 
+import asyncio
+
 from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.core.llm import current_provider_name, is_llm_configured, llm_chat
 
@@ -33,5 +35,7 @@ async def llm_explain(
         if not text:
             return fallback, "template", "empty_content"
         return text, raw.provider or current_provider_name(), ""
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:
-        return fallback, "template", str(exc)
+        return fallback, "template", type(exc).__name__

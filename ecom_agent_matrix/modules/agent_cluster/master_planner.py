@@ -28,6 +28,7 @@ from ecom_agent_matrix.config.constants import (
 from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.core.llm import is_llm_configured, llm_chat, resolve_mode
 from ecom_agent_matrix.core.logging_config import setup_logger
+from ecom_agent_matrix.platform.observability.context import trace_context
 from ecom_agent_matrix.modules.agent_cluster.master.policy import (
     AGENT_ID_ALIASES,
     AVAILABLE_AGENTS,
@@ -348,13 +349,14 @@ async def plan_sub_tasks_llm(task_input: dict, memory_hits: list[dict]) -> PlanR
     )
 
     try:
-        raw = await llm_chat(
-            user_prompt=user_prompt,
-            system_prompt=PLANNER_SYSTEM_PROMPT,
-            temperature=0.1,
-            max_tokens=int(settings.MASTER_PLAN_MAX_TOKENS),
-            mode=resolve_mode(settings.MASTER_PLAN_MODE),
-        )
+        with trace_context(workflow="planner"):
+            raw = await llm_chat(
+                user_prompt=user_prompt,
+                system_prompt=PLANNER_SYSTEM_PROMPT,
+                temperature=0.1,
+                max_tokens=int(settings.MASTER_PLAN_MAX_TOKENS),
+                mode=resolve_mode(settings.MASTER_PLAN_MODE),
+            )
         parsed = _extract_json(raw.content)
         decision = str(parsed.get("decision") or "dispatch").strip().lower()
         if decision == "clarify":
@@ -503,13 +505,14 @@ async def react_decide(
         "Decide the next single action."
     )
     try:
-        raw = await llm_chat(
-            user_prompt=user_prompt,
-            system_prompt=REACT_SYSTEM_PROMPT,
-            temperature=0.1,
-            max_tokens=int(settings.MASTER_REACT_MAX_TOKENS),
-            mode=resolve_mode(settings.MASTER_REACT_MODE),
-        )
+        with trace_context(workflow="recovery"):
+            raw = await llm_chat(
+                user_prompt=user_prompt,
+                system_prompt=REACT_SYSTEM_PROMPT,
+                temperature=0.1,
+                max_tokens=int(settings.MASTER_REACT_MAX_TOKENS),
+                mode=resolve_mode(settings.MASTER_REACT_MODE),
+            )
         parsed = _extract_json(raw.content)
         action = str(parsed.get("action", "")).strip()
         agent = str(parsed.get("agent", "")).strip()

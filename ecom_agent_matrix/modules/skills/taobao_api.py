@@ -1,6 +1,7 @@
 """淘宝开放平台 TOP 工具（由 CRM Agent 按需调用：use_taobao / taobao_method）。"""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import time
 from typing import Any
@@ -12,6 +13,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_valid
 from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
+from ecom_agent_matrix.platform.resilience.circuit_breaker import (
+    CircuitOpenError,
+    get_circuit_breaker,
+)
 
 
 class TaobaoApiInput(BaseModel):
@@ -104,12 +109,27 @@ class TaobaoApiTool(BaseSkill):
 
             sys_params["sign"] = _top_sign(sys_params, app_secret)
 
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.post(
-                    api_url,
-                    content=urlencode(sys_params),
-                    headers={"Content-Type": "application/x-www-form-urlencoded;charset=utf-8"},
-                )
+            async def request_once():
+                async with httpx.AsyncClient(timeout=15) as client:
+                    response = await client.post(
+                        api_url,
+                        content=urlencode(sys_params),
+                        headers={"Content-Type": "application/x-www-form-urlencoded;charset=utf-8"},
+                    )
+                if response.status_code >= 500:
+                    response.raise_for_status()
+                return response
+
+            breaker = get_circuit_breaker(
+                "external:taobao",
+                failure_threshold=int(settings.CIRCUIT_FAILURE_THRESHOLD),
+                reset_seconds=float(settings.CIRCUIT_RESET_SECONDS),
+            )
+            resp = await breaker.call(
+                request_once,
+                is_transient=lambda exc: isinstance(exc, (httpx.TimeoutException, httpx.NetworkError))
+                or isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500,
+            )
 
             if resp.status_code != 200:
                 return SkillResult(
@@ -121,9 +141,12 @@ class TaobaoApiTool(BaseSkill):
             if isinstance(data, dict) and data.get("error_response"):
                 err = data["error_response"]
                 code = err.get("code") or err.get("sub_code") or "?"
-                msg = err.get("msg") or err.get("sub_msg") or str(err)
-                return SkillResult(success=False, error_msg=f"淘宝 API 错误 [{code}]: {msg}", data=data)
+                return SkillResult(success=False, error_msg=f"淘宝 API 错误 [{code}]")
 
             return SkillResult(success=True, data=data)
+        except CircuitOpenError:
+            return SkillResult(success=False, error_code="CIRCUIT_OPEN", error_msg="淘宝依赖暂时不可用")
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             return SkillResult(success=False, error_msg=f"接口请求失败：{type(exc).__name__}")

@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 
 from pydantic import ValidationError
+from ecom_agent_matrix.platform.observability.metrics import observed_workflow
 
 from ecom_agent_matrix.core.memory.short_memory import AgentShortMemory
 from ecom_agent_matrix.core.skill.skill_registry import exec_skill
@@ -82,6 +83,7 @@ def _upstream_knowledge(request: CRMRequest) -> tuple[str, list[dict], int]:
     return "", [], 0
 
 
+@observed_workflow("crm")
 async def run_crm_workflow(
     task: dict | TaskContext,
     *,

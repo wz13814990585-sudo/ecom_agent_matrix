@@ -11,11 +11,12 @@ from ecom_agent_matrix.core.security import (
 )
 from ecom_agent_matrix.core.security.approval import approval_service
 from ecom_agent_matrix.core.security.audit import record_audit_event
+from ecom_agent_matrix.platform.resilience.rate_limit import enforce_business_rate_limit
 
 router = APIRouter(prefix="/api/v1/approvals", tags=["approvals"])
 
 
-@router.post("/{approval_id}/approve")
+@router.post("/{approval_id}/approve", dependencies=[Depends(enforce_business_rate_limit)])
 async def approve_request(
     approval_id: str,
     security: SecurityContext = Depends(get_current_security_context),

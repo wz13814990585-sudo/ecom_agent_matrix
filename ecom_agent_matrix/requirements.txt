@@ -25,6 +25,7 @@ uvicorn[standard]
 pydantic-settings
 pydantic>=2.0
 PyJWT>=2.8
+prometheus-client>=0.20
 
 # 数据处理
 pandas

@@ -19,24 +19,13 @@ async def check_postgres() -> dict[str, Any]:
             read_rows and read_rows[0] and read_rows[0][0] == 1
             and write_rows and write_rows[0] and write_rows[0][0] == 1
         )
-        return {
-            "ok": ok,
-            "host": settings.PG_HOST,
-            "port": settings.PG_PORT,
-            "db": settings.PG_DB,
-        }
+        return {"ok": ok, "status": "ok" if ok else "degraded"}
     except Exception as exc:
         logger.warning(
             "health_pg_failed",
             extra={"event": "health_pg_failed", "error_type": type(exc).__name__},
         )
-        return {
-            "ok": False,
-            "host": settings.PG_HOST,
-            "port": settings.PG_PORT,
-            "db": settings.PG_DB,
-            "error": "Postgres unavailable",
-        }
+        return {"ok": False, "status": "degraded", "error_code": "DEPENDENCY_UNAVAILABLE"}
 
 
 async def check_redis() -> dict[str, Any]:
@@ -45,32 +34,30 @@ async def check_redis() -> dict[str, Any]:
 
         client = await AsyncRedisClient.get_client()
         pong = await client.ping()
-        return {
-            "ok": bool(pong),
-            "host": settings.REDIS_HOST,
-            "port": settings.REDIS_PORT,
-            "db": settings.REDIS_DB,
-        }
+        return {"ok": bool(pong), "status": "ok" if pong else "degraded"}
     except Exception as exc:
         logger.warning(
             "health_redis_failed",
             extra={"event": "health_redis_failed", "error_type": type(exc).__name__},
         )
-        return {
-            "ok": False,
-            "host": settings.REDIS_HOST,
-            "port": settings.REDIS_PORT,
-            "db": settings.REDIS_DB,
-            "error": "Redis unavailable",
-        }
+        return {"ok": False, "status": "degraded", "error_code": "DEPENDENCY_UNAVAILABLE"}
 
 
-async def readiness_report() -> dict[str, Any]:
+async def readiness_report(*, agents_alive: bool = True) -> dict[str, Any]:
+    from ecom_agent_matrix.core.llm.router import is_llm_configured
+
     pg = await check_postgres()
     redis = await check_redis()
-    ready = bool(pg.get("ok") and redis.get("ok"))
+    llm_status = "unknown" if is_llm_configured() else "degraded"
+    llm_ok = llm_status != "degraded" or not bool(settings.LLM_REQUIRED_FOR_READINESS)
+    ready = bool(pg.get("ok") and redis.get("ok") and agents_alive and llm_ok)
     return {
         "ready": ready,
-        "postgres": pg,
-        "redis": redis,
+        "degraded": llm_status == "degraded",
+        "dependencies": {
+            "postgres": pg["status"],
+            "redis": redis["status"],
+            "llm": llm_status,
+            "agents": "ok" if agents_alive else "degraded",
+        },
     }
