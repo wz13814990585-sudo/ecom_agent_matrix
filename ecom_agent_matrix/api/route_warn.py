@@ -3,16 +3,25 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from ecom_agent_matrix.api.auth import require_api_key
+from ecom_agent_matrix.api.auth import get_current_security_context
 from ecom_agent_matrix.api.dispatch import dispatch_and_wait, dispatch_to_master
 from ecom_agent_matrix.api.schemas import ApiResult, CompetitorWarnRequest
 from ecom_agent_matrix.config.constants import AGENT_QUERY, MSG_PRIORITY_RISK
+from ecom_agent_matrix.core.security import SecurityContext, authorize_task
+from ecom_agent_matrix.core.security.errors import AuthorizationError
 
-router = APIRouter(prefix="/api/v1/warn", tags=["warn"], dependencies=[Depends(require_api_key)])
+router = APIRouter(prefix="/api/v1/warn", tags=["warn"])
 
 
 @router.post("/competitor", response_model=ApiResult)
-async def competitor_warn(body: CompetitorWarnRequest) -> ApiResult:
+async def competitor_warn(
+    body: CompetitorWarnRequest,
+    security: SecurityContext = Depends(get_current_security_context),
+) -> ApiResult:
+    try:
+        authorize_task(security, "competitor_watch")
+    except AuthorizationError:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="PERMISSION_DENIED") from None
     query = (body.query or "").strip()
     if not query and not (body.sku and body.competitor):
         raise HTTPException(
@@ -37,6 +46,7 @@ async def competitor_warn(body: CompetitorWarnRequest) -> ApiResult:
             content,
             priority=MSG_PRIORITY_RISK,
             timeout=body.timeout,
+            security=security,
         )
     else:
         if not content.get("sku") or not content.get("competitor"):
@@ -49,5 +59,6 @@ async def competitor_warn(body: CompetitorWarnRequest) -> ApiResult:
             content=content,
             priority=MSG_PRIORITY_RISK,
             timeout=body.timeout,
+            security=security,
         )
     return ApiResult(**result)

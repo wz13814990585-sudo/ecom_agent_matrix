@@ -15,6 +15,7 @@ class TaskContext(BaseModel):
     task_id: str = ""
     correlation_id: str = ""
     source_agent: str = ""
+    identity_trusted: bool = False
 
     query: str = ""
     task_type: str | None = None

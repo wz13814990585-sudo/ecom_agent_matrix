@@ -5,8 +5,15 @@ from copy import deepcopy
 from typing import Any
 
 from ecom_agent_matrix.core.tasking.context import TaskContext
+from ecom_agent_matrix.core.security import SecurityContext
 
 _ENVELOPE_FIELDS = ("task_id", "correlation_id", "source_agent")
+_SECURITY_FIELDS = frozenset(
+    {
+        "tenant_id", "user_id", "store_id", "roles", "role", "scopes", "scope",
+        "subject", "_security", "security_context", "auth_context",
+    }
+)
 
 
 def _clean_string(value: Any) -> str | None:
@@ -41,6 +48,7 @@ def normalize_task_context(
     task_id: str = "",
     correlation_id: str = "",
     source_agent: str = "",
+    security: SecurityContext | None = None,
 ) -> TaskContext:
     """复制并标准化 payload；信封标识只信任显式参数。"""
     if not isinstance(payload, dict):
@@ -50,11 +58,15 @@ def normalize_task_context(
     params = deepcopy(raw)
     for envelope_field in _ENVELOPE_FIELDS:
         params.pop(envelope_field, None)
+    if security is not None:
+        for field_name in _SECURITY_FIELDS:
+            params.pop(field_name, None)
 
     return TaskContext(
         task_id=_clean_string(task_id) or "",
         correlation_id=_clean_string(correlation_id) or "",
         source_agent=_clean_string(source_agent) or "",
+        identity_trusted=security is not None and security.authenticated,
         query=_query(raw),
         task_type=_first_string(raw, "task_type", "_inferred_task_type"),
         query_kind=_first_string(raw, "query_kind"),
@@ -62,9 +74,9 @@ def normalize_task_context(
         sku=_first_string(raw, "sku", "target_sku", "best_sku"),
         product_name=_first_string(raw, "product_name", "goods_name", "name"),
         lang=_first_string(raw, "lang", "language"),
-        store_id=_first_string(raw, "store_id"),
-        tenant_id=_first_string(raw, "tenant_id"),
-        user_id=_first_string(raw, "user_id"),
+        store_id=security.store_id if security is not None else _first_string(raw, "store_id"),
+        tenant_id=security.tenant_id if security is not None else _first_string(raw, "tenant_id"),
+        user_id=security.user_id if security is not None else _first_string(raw, "user_id"),
         session_id=_first_string(raw, "session_id"),
         order_no=_first_string(raw, "order_no"),
         campaign_id=_first_string(raw, "campaign_id"),

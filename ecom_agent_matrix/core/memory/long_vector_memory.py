@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.db.base import AsyncPGClient
@@ -17,7 +17,29 @@ class AgentLongVectorMemory:
 
     TABLE = "agent_long_memory"
 
-    async def save_memory(self, agent_name: str, content: str, meta: dict) -> Optional[int]:
+    @staticmethod
+    def _trusted_scope(context: Any | None) -> dict[str, str]:
+        trusted = bool(
+            getattr(context, "authenticated", False)
+            or getattr(context, "identity_trusted", False)
+        )
+        if not trusted:
+            return {}
+        tenant_id = str(getattr(context, "tenant_id", "") or "").strip()
+        store_id = str(getattr(context, "store_id", "") or "").strip()
+        if not tenant_id or not store_id:
+            return {}
+        return {"tenant_id": tenant_id, "store_id": store_id}
+
+    async def save_memory(
+        self,
+        agent_name: str,
+        content: str,
+        meta: dict,
+        *,
+        context: Any | None = None,
+    ) -> Optional[int]:
+        scoped_meta = {**dict(meta or {}), **self._trusted_scope(context)}
         vec = await get_text_embedding(content)
         sql = f"""
         INSERT INTO {self.TABLE}(agent_name, content, embedding, meta_json)
@@ -25,7 +47,7 @@ class AgentLongVectorMemory:
         """
         res = await AsyncPGClient.execute_sql(
             sql,
-            [agent_name, content, vec, json.dumps(meta, ensure_ascii=False)],
+            [agent_name, content, vec, json.dumps(scoped_meta, ensure_ascii=False)],
         )
         return res[0][0]
 
@@ -34,10 +56,12 @@ class AgentLongVectorMemory:
         agent_name: str,
         content: str,
         meta: dict,
+        *,
+        context: Any | None = None,
     ) -> Optional[int]:
         """写入长期记忆；失败只打日志，不阻断主流程。"""
         try:
-            mem_id = await self.save_memory(agent_name, content, meta)
+            mem_id = await self.save_memory(agent_name, content, meta, context=context)
             logger.info(
                 "long_memory_saved agent=%s id=%s confidence=%s",
                 agent_name,
@@ -61,6 +85,8 @@ class AgentLongVectorMemory:
         top_k: int = 3,
         min_confidence: float | None = None,
         meta_filter: dict | None = None,
+        *,
+        context: Any | None = None,
     ) -> List[Dict]:
         """
         召回高质量记忆：排除 deprecated，优先 success + 高置信度。
@@ -75,8 +101,9 @@ class AgentLongVectorMemory:
 
         where_extra = ""
         params: list = [q_vec, agent_name, min_conf]
-        if meta_filter:
-            for key, value in meta_filter.items():
+        enforced_filter = {**dict(meta_filter or {}), **self._trusted_scope(context)}
+        if enforced_filter:
+            for key, value in enforced_filter.items():
                 where_extra += " AND meta_json->>%s = %s"
                 params.extend([str(key), str(value)])
 

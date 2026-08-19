@@ -17,6 +17,8 @@ from ecom_agent_matrix.core.tasking import (
     ensure_task_context,
     normalize_task_context,
 )
+from ecom_agent_matrix.core.security import SecurityContext
+from ecom_agent_matrix.core.security import require_trusted_ingress
 from ecom_agent_matrix.modules.agent_cluster.handlers import (
     handle_ad,
     handle_crm,
@@ -80,11 +82,12 @@ async def run_exec(
     task: dict | TaskContext,
     *,
     task_id: str = "",
+    security: SecurityContext | None = None,
 ) -> tuple[bool, str, dict]:
     ctx = task if isinstance(task, TaskContext) else ensure_task_context(task)
     if task_id and not isinstance(task, TaskContext):
         ctx = ctx.with_updates(task_id=task_id.strip())
-    with skill_execution_context(AGENT_EXEC):
+    with skill_execution_context(AGENT_EXEC, task_context=ctx, security=security):
         kind = infer_exec_kind(ctx)
         if kind == "ad":
             return await handle_ad(ctx)
@@ -110,15 +113,17 @@ async def exec_agent(msg_queue: asyncio.Queue):
         msg: MCPMessage = await msg_queue.get()
         started = time.perf_counter()
         try:
+            require_trusted_ingress(msg.security, app_env=settings.APP_ENV)
             async with sem:
                 ctx = normalize_task_context(
                     msg.content or {},
                     task_id=msg.task_id,
                     correlation_id=msg.correlation_id,
                     source_agent=AGENT_EXEC,
+                    security=msg.security,
                 )
                 ok, err, data = await asyncio.wait_for(
-                    run_exec(ctx),
+                    run_exec(ctx, security=msg.security),
                     timeout=float(settings.EXEC_SKILL_TIMEOUT),
                 )
                 elapsed_ms = (time.perf_counter() - started) * 1000

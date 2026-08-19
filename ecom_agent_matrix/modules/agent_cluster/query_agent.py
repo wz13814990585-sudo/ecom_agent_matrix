@@ -18,6 +18,8 @@ from ecom_agent_matrix.core.tasking import (
     ensure_task_context,
     normalize_task_context,
 )
+from ecom_agent_matrix.core.security import SecurityContext
+from ecom_agent_matrix.core.security import require_trusted_ingress
 from ecom_agent_matrix.modules.agent_cluster.handlers import (
     handle_data_check,
     handle_goods,
@@ -96,10 +98,14 @@ async def _ensure_sku(ctx: TaskContext) -> tuple[TaskContext, dict | None]:
     return ctx.with_updates(sku=sku, params=new_params), None
 
 
-async def run_query(task: dict | TaskContext) -> tuple[bool, str, dict]:
+async def run_query(
+    task: dict | TaskContext,
+    *,
+    security: SecurityContext | None = None,
+) -> tuple[bool, str, dict]:
     """执行一次只读查询（可供单测直接调用）。"""
     ctx = ensure_task_context(task)
-    with skill_execution_context(AGENT_QUERY):
+    with skill_execution_context(AGENT_QUERY, task_context=ctx, security=security):
         return await _run_query_in_context(ctx)
 
 
@@ -141,15 +147,17 @@ async def query_agent(msg_queue: asyncio.Queue):
         msg: MCPMessage = await msg_queue.get()
         started = time.perf_counter()
         try:
+            require_trusted_ingress(msg.security, app_env=settings.APP_ENV)
             async with sem:
                 ctx = normalize_task_context(
                     msg.content or {},
                     task_id=msg.task_id,
                     correlation_id=msg.correlation_id,
                     source_agent=AGENT_QUERY,
+                    security=msg.security,
                 )
                 ok, err, data = await asyncio.wait_for(
-                    run_query(ctx),
+                    run_query(ctx, security=msg.security),
                     timeout=float(settings.QUERY_SKILL_TIMEOUT),
                 )
                 elapsed_ms = (time.perf_counter() - started) * 1000

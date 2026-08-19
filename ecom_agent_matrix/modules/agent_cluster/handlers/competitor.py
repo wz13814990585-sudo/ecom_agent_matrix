@@ -238,6 +238,7 @@ async def run_competitor_workflow(task: dict | TaskContext) -> WorkflowResult:
             agent_name=AGENT_QUERY,
             top_k=3,
             meta_filter={"sku": request.sku},
+            context=ctx,
         )
     except Exception:
         history_hits = []

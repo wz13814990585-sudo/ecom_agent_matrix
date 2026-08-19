@@ -116,7 +116,15 @@ async def run_crm_workflow(
     history: list = []
     short_memory: AgentShortMemory | None = None
     try:
-        short_memory = AgentShortMemory(session_id=request.session_id)
+        memory_identity = (
+            {"tenant_id": ctx.tenant_id, "user_id": ctx.user_id}
+            if ctx.identity_trusted and ctx.tenant_id and ctx.user_id
+            else {}
+        )
+        short_memory = AgentShortMemory(
+            session_id=request.session_id,
+            **memory_identity,
+        )
     except Exception as exc:
         memory_errors.append(f"init:{type(exc).__name__}")
     if short_memory is not None:

@@ -95,6 +95,7 @@ async def run_ad_workflow(task: dict | TaskContext) -> WorkflowResult:
                 agent_name=AGENT_EXEC,
                 top_k=3,
                 meta_filter={"sku": request.sku},
+                context=ctx,
             )
         except Exception as exc:
             memory_errors.append(f"recall:{type(exc).__name__}")
@@ -152,6 +153,7 @@ async def run_ad_workflow(task: dict | TaskContext) -> WorkflowResult:
                     "confidence": 0.8,
                     "deprecated": False,
                 },
+                context=ctx,
             )
             if memory_id is None:
                 memory_errors.append("save:unavailable")

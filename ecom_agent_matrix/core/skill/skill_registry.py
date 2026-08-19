@@ -3,9 +3,13 @@
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Dict, Iterator, Type
+from typing import TYPE_CHECKING, Dict, Iterator, Type
 
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
+from ecom_agent_matrix.core.security import SecurityContext
+
+if TYPE_CHECKING:
+    from ecom_agent_matrix.core.tasking import TaskContext
 
 # 全局工具容器：key=skill_name，value=工具类
 skill_container: Dict[str, Type[BaseSkill]] = {}
@@ -16,6 +20,13 @@ class SkillExecutionContext:
     """一次 Agent 调用链的权限主体。"""
 
     agent_id: str
+    task_id: str = ""
+    tenant_id: str = ""
+    store_id: str = ""
+    user_id: str = ""
+    roles: frozenset[str] = frozenset()
+    scopes: frozenset[str] = frozenset()
+    identity_trusted: bool = False
 
 
 _execution_context: ContextVar[SkillExecutionContext | None] = ContextVar(
@@ -25,9 +36,26 @@ _execution_context: ContextVar[SkillExecutionContext | None] = ContextVar(
 
 
 @contextmanager
-def skill_execution_context(agent_id: str) -> Iterator[SkillExecutionContext]:
+def skill_execution_context(
+    agent_id: str,
+    *,
+    task_context: "TaskContext | None" = None,
+    security: SecurityContext | None = None,
+    task_id: str = "",
+) -> Iterator[SkillExecutionContext]:
     """为当前异步调用链绑定 Agent 身份，嵌套 Skill 自动继承。"""
-    context = SkillExecutionContext(agent_id=agent_id)
+    context = SkillExecutionContext(
+        agent_id=agent_id,
+        task_id=(task_context.task_id if task_context is not None else task_id),
+        tenant_id=(security.tenant_id if security else (task_context.tenant_id or "") if task_context else ""),
+        store_id=(security.store_id if security else (task_context.store_id or "") if task_context else ""),
+        user_id=(security.user_id if security else (task_context.user_id or "") if task_context else ""),
+        roles=security.roles if security else frozenset(),
+        scopes=security.scopes if security else frozenset(),
+        identity_trusted=bool(security and security.authenticated) or bool(
+            task_context and task_context.identity_trusted
+        ),
+    )
     token = _execution_context.set(context)
     try:
         yield context

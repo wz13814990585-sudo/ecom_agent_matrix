@@ -24,6 +24,7 @@ fastapi
 uvicorn[standard]
 pydantic-settings
 pydantic>=2.0
+PyJWT>=2.8
 
 # 数据处理
 pandas

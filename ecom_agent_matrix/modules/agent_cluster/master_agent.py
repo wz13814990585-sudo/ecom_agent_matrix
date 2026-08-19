@@ -18,6 +18,13 @@ from ecom_agent_matrix.core.mcp.registry import register_agent
 from ecom_agent_matrix.core.mcp.reply import build_reply
 from ecom_agent_matrix.core.mcp.task_waiter import TaskReplyWaiter, is_agent_reply
 from ecom_agent_matrix.core.llm.output_polish import polish_final_output
+from ecom_agent_matrix.core.security import (
+    authorize_task,
+    authorize_task_types,
+    security_log_fields,
+    require_trusted_ingress,
+)
+from ecom_agent_matrix.core.security.errors import AuthorizationError
 from ecom_agent_matrix.modules.agent_cluster.master.executor import MasterPlanExecutor
 from ecom_agent_matrix.modules.agent_cluster.master.planner import typed_master_planner
 from ecom_agent_matrix.modules.agent_cluster.master.react import recovery_controller
@@ -96,6 +103,7 @@ async def _dispatch_subtask(
     target_agent: str,
     payload: dict,
     priority: int,
+    security=None,
 ) -> None:
     """限流后向子 Agent 下发单步任务。"""
     sem = _get_subtask_semaphore()
@@ -109,6 +117,7 @@ async def _dispatch_subtask(
             target=target_agent,
             priority=priority,
             content=clean,
+            security=security,
         )
         await mcp_bus.send_msg(sub_msg)
         logger.info(
@@ -127,12 +136,20 @@ async def _react_call_one(
     target_agent: str,
     payload: dict,
     priority: int,
+    security=None,
 ) -> dict:
     """ReAct 单步：下发一个 Agent → 等待回传 → 返回 observation。"""
     correlation_id = str(uuid.uuid4())
     TaskReplyWaiter.begin(correlation_id, 1)
     try:
-        await _dispatch_subtask(task_id, correlation_id, target_agent, payload, priority)
+        if security is None:
+            await _dispatch_subtask(
+                task_id, correlation_id, target_agent, payload, priority
+            )
+        else:
+            await _dispatch_subtask(
+                task_id, correlation_id, target_agent, payload, priority, security
+            )
         replies = await TaskReplyWaiter.wait(correlation_id, timeout=float(settings.MCP_TIMEOUT))
     finally:
         TaskReplyWaiter.discard(correlation_id)
@@ -211,6 +228,7 @@ async def _save_plan_memory(
     execution: PlanExecutionResult,
     usage: dict[str, Any],
     recovery_actions: list[dict[str, Any]] | None = None,
+    security=None,
 ) -> None:
     """Complex plan 仅保存紧凑状态，不持久化 payload/result/reasoning。"""
     compact = {
@@ -254,6 +272,7 @@ async def _save_plan_memory(
             "verified": False,
             "deprecated": False,
         },
+        context=security,
     )
 
 
@@ -299,6 +318,22 @@ async def _process_complex_plan(
             )
         )
         return
+
+    if msg.security is not None:
+        try:
+            authorize_task_types(msg.security, (step.task_type for step in plan.steps))
+        except AuthorizationError as exc:
+            await mcp_bus.send_msg(
+                build_reply(
+                    msg,
+                    sender=AGENT_MASTER,
+                    success=False,
+                    data={"error_code": exc.error_code, "task_type": exc.task_type},
+                    error_msg="PERMISSION_DENIED",
+                    msg_type="master_task_result",
+                )
+            )
+            return
 
     executor = MasterPlanExecutor()
     execution = await executor.execute(plan, msg)
@@ -397,6 +432,7 @@ async def _process_complex_plan(
             execution=execution,
             usage=usage,
             recovery_actions=recovery_actions,
+            security=msg.security,
         )
     except Exception as exc:
         logger.warning(
@@ -426,6 +462,7 @@ async def execute_fast_path(
         target_agent,
         payload,
         msg.priority,
+        msg.security,
     )
     timed_out = bool(observation.get("timed_out"))
     success = bool(observation.get("success")) and not timed_out
@@ -475,6 +512,7 @@ async def execute_fast_path(
 async def process_master_task(msg: MCPMessage, long_mem: AgentLongVectorMemory) -> None:
     """Route to Fast Path or validated DAG, then apply bounded recovery if needed."""
     task_id = msg.task_id
+    require_trusted_ingress(msg.security, app_env=settings.APP_ENV)
     started = time.perf_counter()
     task_input = dict(msg.content or {})
     task_type = task_input.get("task_type", "unknown")
@@ -487,6 +525,7 @@ async def process_master_task(msg: MCPMessage, long_mem: AgentLongVectorMemory) 
             "task_id": task_id,
             "task_type": task_descriptor["task_type"],
             "query": task_descriptor["query"][:200],
+            **security_log_fields(msg.security),
         },
     )
 
@@ -502,6 +541,22 @@ async def process_master_task(msg: MCPMessage, long_mem: AgentLongVectorMemory) 
             "confidence": route.confidence,
         },
     )
+
+    if route.task_type and msg.security is not None:
+        try:
+            authorize_task(msg.security, route.task_type)
+        except AuthorizationError as exc:
+            await mcp_bus.send_msg(
+                build_reply(
+                    msg,
+                    sender=AGENT_MASTER,
+                    success=False,
+                    data={"error_code": exc.error_code, "task_type": exc.task_type},
+                    error_msg="PERMISSION_DENIED",
+                    msg_type="master_task_result",
+                )
+            )
+            return
 
     if route.mode == "clarify":
         clarification = "请说明您要查询的数据、咨询的店铺规则，或需要执行的业务操作。"

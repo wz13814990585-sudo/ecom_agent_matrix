@@ -13,6 +13,7 @@ from ecom_agent_matrix.core.logging_config import setup_logger
 from ecom_agent_matrix.core.mcp.bus import mcp_bus
 from ecom_agent_matrix.core.mcp.message import MCPMessage
 from ecom_agent_matrix.core.mcp.task_waiter import TaskReplyWaiter
+from ecom_agent_matrix.core.security import authorize_task_types
 from ecom_agent_matrix.modules.agent_cluster.master.policy import validate_master_plan
 from ecom_agent_matrix.modules.agent_cluster.master.schemas import (
     MasterPlan,
@@ -91,6 +92,10 @@ class MasterPlanExecutor:
         root_message: MCPMessage,
     ) -> PlanExecutionResult:
         validate_master_plan(plan)
+        if root_message.security is not None:
+            authorize_task_types(
+                root_message.security, (step.task_type for step in plan.steps)
+            )
         results = {
             step.step_id: StepResult(
                 step_id=step.step_id,
@@ -112,6 +117,10 @@ class MasterPlanExecutor:
     ) -> PlanExecutionResult:
         """从已验证 DAG 恢复：保留成功步骤，仅重置指定重试和曾因依赖失败而跳过的步骤。"""
         validate_master_plan(plan)
+        if root_message.security is not None:
+            authorize_task_types(
+                root_message.security, (step.task_type for step in plan.steps)
+            )
         known = {step.step_id for step in plan.steps}
         unknown = set(retry_step_ids) - known
         if unknown:
@@ -273,6 +282,7 @@ class MasterPlanExecutor:
                     target=step.agent,
                     priority=root_message.priority,
                     content=payload,
+                    security=root_message.security,
                 )
                 await mcp_bus.send_msg(child)
                 replies = await TaskReplyWaiter.wait(correlation_id, timeout=self.timeout)

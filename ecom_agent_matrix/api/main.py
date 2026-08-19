@@ -9,7 +9,10 @@ from fastapi import Depends, FastAPI, Response, status
 # 侧载注册 Agent / Skill
 import ecom_agent_matrix.modules.agent_cluster  # noqa: F401
 import ecom_agent_matrix.modules.skills  # noqa: F401
-from ecom_agent_matrix.api.auth import require_api_key
+from ecom_agent_matrix.api.auth import (
+    get_current_security_context,
+    validate_security_configuration,
+)
 from ecom_agent_matrix.api.health import readiness_report
 from ecom_agent_matrix.api.route_customer import router as customer_router
 from ecom_agent_matrix.api.route_task import router as task_router
@@ -35,21 +38,13 @@ _OPENAPI_TAGS = [
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     global _agent_task
-    api_key_on = bool((settings.API_KEY or "").strip())
-    if not api_key_on:
-        logger.warning(
-            "api_auth_disabled",
-            extra={
-                "event": "api_auth_disabled",
-                "error": "API_KEY 为空，HTTP 接口未鉴权（仅适合本地开发）",
-            },
-        )
+    validate_security_configuration(settings)
     logger.info(
         "api_starting",
         extra={
             "event": "api_starting",
             "agents": sorted(agent_map.keys()),
-            "api_auth_enabled": api_key_on,
+            "auth_mode": settings.AUTH_MODE,
         },
     )
     if not agent_map:
@@ -72,7 +67,7 @@ app = FastAPI(
     description=(
         "跨境独立站电商多智能体矩阵 HTTP 网关。\n\n"
         "- 交互文档：`/docs`（Swagger）或 `/redoc`\n"
-        "- 鉴权：配置 `API_KEY` 后请求头携带 `X-API-Key`\n"
+        "- 鉴权：开发环境 X-API-Key，生产环境 JWT Bearer token\n"
         "- 通用任务走 Master（规划/分发/聚合）；子 Agent 仅 Query / Exec / RAG"
     ),
     lifespan=lifespan,
@@ -90,7 +85,7 @@ async def health():
         "agents_running": bool(_agent_task and not _agent_task.done()),
         "agents_count": len(agent_map),
         "skills_count": len(skill_container),
-        "api_auth_enabled": bool((settings.API_KEY or "").strip()),
+        "api_auth_enabled": True,
     }
 
 
@@ -110,7 +105,7 @@ async def health_ready(response: Response):
     "/api/v1/agents",
     tags=["system"],
     summary="已注册 Agent / Skill",
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(get_current_security_context)],
 )
 async def list_agents():
     return {"agents": sorted(agent_map.keys()), "skills": sorted(skill_container.keys())}

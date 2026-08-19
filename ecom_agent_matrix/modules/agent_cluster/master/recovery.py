@@ -7,6 +7,8 @@ from typing import Any
 
 from ecom_agent_matrix.config.constants import AGENT_EXEC, AGENT_QUERY, AGENT_RAG
 from ecom_agent_matrix.core.mcp.message import MCPMessage
+from ecom_agent_matrix.core.security import authorize_task_types
+from ecom_agent_matrix.core.security.errors import AuthorizationError
 from ecom_agent_matrix.modules.agent_cluster.master.executor import MasterPlanExecutor
 from ecom_agent_matrix.modules.agent_cluster.master.planner import TypedMasterPlanner
 from ecom_agent_matrix.modules.agent_cluster.master.policy import (
@@ -150,6 +152,17 @@ async def apply_recovery_decision(
             return RecoveryApplication(plan, execution, rejected)
         try:
             validate_master_plan(replanned)
+            if root_message.security is not None:
+                authorize_task_types(
+                    root_message.security,
+                    (step.task_type for step in replanned.steps),
+                )
+        except AuthorizationError:
+            rejected = RecoveryDecision(
+                action="finish",
+                reason_code="PERMISSION_DENIED",
+            )
+            return RecoveryApplication(plan, execution, rejected)
         except (MasterPlanValidationError, TypeError, ValueError):
             rejected = RecoveryDecision(
                 action="finish",

@@ -15,6 +15,7 @@ from ecom_agent_matrix.core.mcp.registry import register_agent
 from ecom_agent_matrix.core.mcp.reply import build_rag_reply
 from ecom_agent_matrix.modules.rag.schemas import RAGRequest
 from ecom_agent_matrix.modules.rag.service import rag_service
+from ecom_agent_matrix.core.security import require_trusted_ingress
 
 logger = setup_logger("rag.agent")
 
@@ -35,6 +36,7 @@ async def rag_agent(msg_queue: asyncio.Queue):
         query = ""
         lang = "en"
         try:
+            require_trusted_ingress(msg.security, app_env=settings.APP_ENV)
             payload = dict(msg.content or {})
             query = str(payload.get("query") or "").strip()
             lang = str(payload.get("lang") or "en")

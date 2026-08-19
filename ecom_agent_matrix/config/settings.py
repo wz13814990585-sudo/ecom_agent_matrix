@@ -146,7 +146,19 @@ class Settings(BaseSettings):
     MASTER_MEMORY_RECALL_MIN_CONFIDENCE: float = 0.6
 
     # HTTP API
-    API_KEY: str = ""  # 空则本地不鉴权；生产请设置并走 X-API-Key
+    APP_ENV: str = "development"
+    AUTH_MODE: str = "api_key"
+    ALLOW_INSECURE_LOCAL: bool = False
+    API_KEY: str = ""
+    JWT_SECRET: str = ""
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ISSUER: str = ""
+    JWT_AUDIENCE: str = ""
+    DEV_TENANT_ID: str = "demo_tenant"
+    DEV_STORE_ID: str = "demo_store"
+    DEV_USER_ID: str = "demo_user"
+    DEV_ROLES: str = "admin"
+    DEV_SCOPES: str = ""
     API_REQUEST_TIMEOUT: float = 90.0
     API_SENDER: str = "api_gateway"
 

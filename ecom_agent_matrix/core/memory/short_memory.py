@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from typing import Any
 
 from ecom_agent_matrix.config.settings import settings
@@ -32,6 +33,8 @@ class AgentShortMemory:
         session_id: str,
         ttl: int | None = None,
         max_messages: int | None = None,
+        tenant_id: str | None = None,
+        user_id: str | None = None,
     ):
         self.session_id = session_id
         self.ttl = int(ttl if ttl is not None else settings.SHORT_MEMORY_TTL)
@@ -41,7 +44,13 @@ class AgentShortMemory:
             else settings.SHORT_MEMORY_MAX_MESSAGES
         )
         # list: 新结构；旧 string JSON 会在首次读写时迁移
-        self.key = f"agent:short_mem:{session_id}"
+        if tenant_id and user_id:
+            tenant_key = hashlib.sha256(str(tenant_id).encode("utf-8")).hexdigest()[:24]
+            user_key = hashlib.sha256(str(user_id).encode("utf-8")).hexdigest()[:24]
+            session_key = hashlib.sha256(str(session_id).encode("utf-8")).hexdigest()[:24]
+            self.key = f"agent:short_mem:{tenant_key}:{user_key}:{session_key}"
+        else:
+            self.key = f"agent:short_mem:{session_id}"
 
     async def append(self, role: str, content: str) -> int:
         """追加一条消息并滑动截断，返回当前列表长度。"""

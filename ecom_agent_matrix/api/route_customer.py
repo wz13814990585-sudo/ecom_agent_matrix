@@ -3,20 +3,25 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from ecom_agent_matrix.api.auth import require_api_key
+from ecom_agent_matrix.api.auth import get_current_security_context
 from ecom_agent_matrix.api.dispatch import dispatch_to_master
 from ecom_agent_matrix.api.schemas import ApiResult, CustomerChatRequest
 from ecom_agent_matrix.config.constants import MSG_PRIORITY_CUSTOMER
+from ecom_agent_matrix.core.security import SecurityContext, authorize_task
+from ecom_agent_matrix.core.security.errors import AuthorizationError
+from fastapi import HTTPException, status
 
 router = APIRouter(
     prefix="/api/v1/customer",
     tags=["customer"],
-    dependencies=[Depends(require_api_key)],
 )
 
 
 @router.post("/chat", response_model=ApiResult)
-async def customer_chat(body: CustomerChatRequest) -> ApiResult:
+async def customer_chat(
+    body: CustomerChatRequest,
+    security: SecurityContext = Depends(get_current_security_context),
+) -> ApiResult:
     content: dict = {
         "query": body.query,
         "user_query": body.query,
@@ -33,9 +38,15 @@ async def customer_chat(body: CustomerChatRequest) -> ApiResult:
     if body.taobao_method:
         content["taobao_method"] = body.taobao_method
 
+    try:
+        authorize_task(security, str(content["task_type"]))
+    except AuthorizationError:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="PERMISSION_DENIED") from None
+
     result = await dispatch_to_master(
         content,
         priority=MSG_PRIORITY_CUSTOMER,
         timeout=body.timeout,
+        security=security,
     )
     return ApiResult(**result)

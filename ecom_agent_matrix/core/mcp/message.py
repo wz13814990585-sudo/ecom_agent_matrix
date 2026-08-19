@@ -3,6 +3,7 @@
 import uuid
 from pydantic import BaseModel, Field
 from ecom_agent_matrix.config.constants import MSG_PRIORITY_NORMAL
+from ecom_agent_matrix.core.security import SecurityContext
 
 class MCPMessage(BaseModel):
     """MCP全局统一消息数据模型，所有智能体通信强制使用该结构"""
@@ -14,4 +15,5 @@ class MCPMessage(BaseModel):
     target: str          # 接收方Agent唯一标识
     priority: int = MSG_PRIORITY_NORMAL  # 消息优先级，数字越小优先级越高
     content: dict        # 任务核心参数，字典存储任意业务数据（查询商品/竞品比价/生成文案等）
+    security: SecurityContext | None = None
     create_time: float = Field(default_factory=lambda: uuid.uuid1().time)  # 消息创建时间戳

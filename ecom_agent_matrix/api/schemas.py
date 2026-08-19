@@ -5,9 +5,17 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+RESERVED_SECURITY_FIELDS = frozenset(
+    {
+        "tenant_id", "user_id", "store_id", "roles", "role", "scopes", "scope",
+        "subject", "_security", "security_context", "auth_context",
+    }
+)
+
 
 class TaskCreateRequest(BaseModel):
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "examples": [
                 {"query": "查询数据库有哪些商品"},
@@ -56,6 +64,14 @@ class TaskCreateRequest(BaseModel):
         if v is None or v == "" or v == 0 or v == 0.0:
             return None
         return v
+
+    @field_validator("payload")
+    @classmethod
+    def _forbid_spoofed_identity(cls, value: dict[str, Any]) -> dict[str, Any]:
+        forbidden = RESERVED_SECURITY_FIELDS.intersection(value)
+        if forbidden:
+            raise ValueError("SECURITY_FIELD_FORBIDDEN: " + ", ".join(sorted(forbidden)))
+        return value
 
 
 class CustomerChatRequest(BaseModel):

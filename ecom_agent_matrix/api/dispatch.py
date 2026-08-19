@@ -13,6 +13,7 @@ from ecom_agent_matrix.core.mcp.bus import mcp_bus
 from ecom_agent_matrix.core.mcp.message import MCPMessage
 from ecom_agent_matrix.core.mcp.registry import agent_map
 from ecom_agent_matrix.core.mcp.result_waiter import GatewayResultWaiter
+from ecom_agent_matrix.core.security import SecurityContext
 
 
 async def dispatch_and_wait(
@@ -21,6 +22,7 @@ async def dispatch_and_wait(
     content: dict[str, Any],
     priority: int,
     timeout: float | None = None,
+    security: SecurityContext | None = None,
 ) -> dict[str, Any]:
     """向目标 Agent 发任务并等待最终回传，并生成可读 summary。"""
     if target not in agent_map:
@@ -38,6 +40,7 @@ async def dispatch_and_wait(
         target=target,
         priority=priority,
         content=content,
+        security=security,
     )
     try:
         await mcp_bus.send_msg(msg)
@@ -95,10 +98,12 @@ async def dispatch_to_master(
     *,
     priority: int,
     timeout: float | None = None,
+    security: SecurityContext | None = None,
 ) -> dict[str, Any]:
     return await dispatch_and_wait(
         target=AGENT_MASTER,
         content=content,
         priority=priority,
         timeout=timeout,
+        security=security,
     )
