@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
+
+from ecom_agent_matrix.core.llm.types import ChatResult
 
 from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.core.llm.router import is_llm_configured, llm_chat
@@ -112,6 +115,8 @@ async def polish_final_output(
     user_query: str = "",
     reply_from: str = "",
     prefer_existing_answer: bool = True,
+    on_provider_start: Callable[[], bool] | None = None,
+    on_provider_result: Callable[[ChatResult], None] | None = None,
 ) -> str:
     """
     将最终结果整理为可读摘要。
@@ -174,6 +179,10 @@ async def polish_final_output(
     )
 
     try:
+        if on_provider_start is not None and not on_provider_start():
+            return _heuristic_summary(
+                success=success, data=payload, error_msg=error_msg, reply_from=reply_from
+            )
         text = await llm_chat(
             user_prompt=user_prompt,
             system_prompt=_SYSTEM_PROMPT,
@@ -181,6 +190,8 @@ async def polish_final_output(
             max_tokens=settings.OUTPUT_POLISH_MAX_TOKENS,
             mode="chat",
         )
+        if on_provider_result is not None:
+            on_provider_result(text)
         if text.content.strip():
             return text.content.strip()
     except Exception as exc:

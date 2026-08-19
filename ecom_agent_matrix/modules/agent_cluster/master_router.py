@@ -8,7 +8,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.core.llm import is_llm_configured
-from ecom_agent_matrix.modules.agent_cluster.master_planner import TASK_ROUTE_MAP
+from ecom_agent_matrix.modules.agent_cluster.master.policy import (
+    TASK_ROUTE_MAP,
+    is_composite_customer_reply,
+)
 
 
 class MasterRouteDecision(BaseModel):
@@ -123,6 +126,13 @@ def route_master_task(task_input: dict) -> MasterRouteDecision:
         )
 
     query = _query(task_input)
+    if is_composite_customer_reply(query):
+        return MasterRouteDecision(
+            mode="planner",
+            confidence=0.98,
+            reason_code="COMPOSITE_CUSTOMER_REPLY",
+            source="rules_composite",
+        )
     matches = [rule for rule in _RULES if rule[2].search(query)]
     matched_types = {rule[0] for rule in matches}
     if len(matched_types) > 1:

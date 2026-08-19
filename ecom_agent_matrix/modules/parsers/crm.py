@@ -26,6 +26,7 @@ class CRMRequest(BaseModel):
     taobao_payload: dict[str, Any] = Field(default_factory=dict)
     is_fallback_route: bool = False
     task_id: str = ""
+    upstream_context: dict[str, Any] = Field(default_factory=dict)
 
 
 def parse_crm_request(task: TaskContext) -> CRMRequest:
@@ -50,4 +51,9 @@ def parse_crm_request(task: TaskContext) -> CRMRequest:
         taobao_payload=taobao_payload,
         is_fallback_route=bool(params.get("_fallback_route")),
         task_id=task.task_id,
+        upstream_context=(
+            params.get("_upstream_context")
+            if isinstance(params.get("_upstream_context"), dict)
+            else {}
+        ),
     )

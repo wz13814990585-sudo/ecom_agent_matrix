@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import json
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -20,6 +21,7 @@ CRM_SYSTEM_PROMPT = (
     "仅当检索结果明确缺失某细节（如清洗步骤）时，才说明「知识库暂无该细节」，"
     "可基于已有卖点做有限合理说明，并邀请用户补充 SKU/订单号。"
     "不要编造物流单号或退款到账时间。"
+    "若提供「已验证业务上下文」，优先使用其中订单事实与政策内容，不要编造缺失字段。"
 )
 
 _KNOWLEDGE_HINT = re.compile(
@@ -40,6 +42,7 @@ class CrmReplyInput(BaseModel):
     taobao_info: dict[str, Any] = Field(default_factory=dict)
     is_fallback_route: bool = False
     task_id: str | None = None
+    upstream_context: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def require_query(self) -> "CrmReplyInput":
@@ -153,6 +156,9 @@ class CrmReplyTool(BaseSkill):
             taobao_info = params.get("taobao_info")
             if not isinstance(taobao_info, dict):
                 taobao_info = {"skipped": True}
+            upstream_context = params.get("upstream_context") or {}
+            if not isinstance(upstream_context, dict):
+                upstream_context = {}
 
             rag_docs: list[dict] = []
             rag_error = ""
@@ -173,6 +179,11 @@ class CrmReplyTool(BaseSkill):
                         if isinstance(h, dict)
                     )
                     rag_block = format_rag_docs(rag_docs)
+                    verified_context = json.dumps(
+                        upstream_context,
+                        ensure_ascii=False,
+                        default=str,
+                    )[:3500]
                     taobao_block = ""
                     if not taobao_info.get("skipped"):
                         taobao_block = (
@@ -185,6 +196,7 @@ class CrmReplyTool(BaseSkill):
                             f"用户语种偏好: {lang}\n"
                             f"近期对话:\n{hist_snip}\n\n"
                             f"商品知识检索:\n{rag_block or '(无)'}\n"
+                            f"已验证业务上下文:\n{verified_context or '(无)'}\n"
                             f"{taobao_block}\n"
                             f"当前问题: {user_query}"
                         ),

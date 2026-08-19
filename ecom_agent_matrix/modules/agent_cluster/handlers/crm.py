@@ -101,16 +101,23 @@ async def run_crm_workflow(
             history = []
 
     taobao_info, taobao_error_code = await _run_taobao(request)
+    has_policy_context = any(
+        isinstance(value, dict)
+        and value.get("task_type") == "knowledge_qa"
+        and bool(value.get("data"))
+        for value in request.upstream_context.values()
+    )
     reply_result = await exec_skill(
         "crm_reply",
         {
             "user_query": request.query,
             "lang": request.lang,
             "history": history,
-            "use_rag": request.use_rag,
+            "use_rag": False if has_policy_context else request.use_rag,
             "taobao_info": taobao_info,
             "is_fallback_route": request.is_fallback_route,
             "task_id": request.task_id,
+            "upstream_context": request.upstream_context,
         },
     )
     reply_data = reply_result.data or {}

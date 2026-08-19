@@ -17,6 +17,13 @@ from ecom_agent_matrix.modules.agent_cluster.master_agent import (
     execute_fast_path,
     process_master_task,
 )
+from ecom_agent_matrix.modules.agent_cluster.master.schemas import (
+    MasterPlan,
+    PlanExecutionResult,
+    PlanStep,
+    RecoveryDecision,
+    StepResult,
+)
 from ecom_agent_matrix.modules.agent_cluster.master_planner import PlanResult, ReactDecision
 from ecom_agent_matrix.modules.agent_cluster.master_router import (
     MasterRouteDecision,
@@ -70,7 +77,7 @@ def test_multi_domain_request_never_uses_fast_path():
     ):
         route = route_master_task({"query": query})
     assert route.mode == "planner"
-    assert route.reason_code == "AMBIGUOUS"
+    assert route.reason_code == "COMPOSITE_CUSTOMER_REPLY"
     assert route.target_agents == []
 
 
@@ -228,7 +235,7 @@ def test_fast_path_reuses_child_text_without_polish(agent, data, expected):
     assert result["master_llm_calls"]["total"] == 0
 
 
-def test_react_immediate_finish_with_zero_observations_is_success():
+def test_typed_planner_clarify_with_zero_steps_is_success():
     async def scenario():
         request = MCPMessage(
             task_id="root-zero",
@@ -239,21 +246,18 @@ def test_react_immediate_finish_with_zero_observations_is_success():
         route = MasterRouteDecision(
             mode="planner", confidence=0.4, reason_code="AMBIGUOUS"
         )
-        plan = PlanResult(
-            sub_tasks=[], plan_confidence=0.9, reasoning="done", planner="test"
+        plan = MasterPlan(
+            decision="clarify",
+            steps=[],
+            confidence=0.9,
+            reason_code="NEEDS_CLARIFICATION",
+            clarification_question="完成",
+            planner_source="test",
         )
         memory = AsyncMock()
         memory.recall.return_value = []
         with patch.object(master_module, "route_master_task", return_value=route), patch.object(
-            master_module, "plan_sub_tasks_llm", new=AsyncMock(return_value=plan)
-        ), patch.object(
-            master_module,
-            "react_decide",
-            new=AsyncMock(
-                return_value=ReactDecision(
-                    thought="already complete", action="finish", final_answer="完成"
-                )
-            ),
+            master_module.typed_master_planner, "plan", new=AsyncMock(return_value=plan)
         ), patch.object(master_module.mcp_bus, "send_msg", new=AsyncMock(return_value=True)) as send:
             await process_master_task(request, memory)
         return send.await_args_list[0].args[0].content["data"]
@@ -265,7 +269,7 @@ def test_react_immediate_finish_with_zero_observations_is_success():
     assert data["summary"] == "完成"
 
 
-def test_react_real_timeout_remains_timeout():
+def test_plan_step_real_timeout_remains_timeout():
     async def scenario():
         request = MCPMessage(
             task_id="root-timeout",
@@ -276,32 +280,37 @@ def test_react_real_timeout_remains_timeout():
         route = MasterRouteDecision(
             mode="planner", confidence=0.4, reason_code="AMBIGUOUS"
         )
-        plan = PlanResult(
-            sub_tasks=[{"target_agent": AGENT_QUERY, "payload": {"query": "x"}}],
-            plan_confidence=0.9,
-            reasoning="query",
-            planner="test",
+        plan = MasterPlan(
+            decision="execute",
+            confidence=0.9,
+            reason_code="TEST",
+            planner_source="test",
+            steps=[PlanStep(step_id="order_context", agent=AGENT_QUERY, task_type="order_query")],
         )
         memory = AsyncMock()
         memory.recall.return_value = []
-        decision = ReactDecision(
-            thought="query", action="call_agent", agent=AGENT_QUERY, payload={}
+        execution = PlanExecutionResult(
+            all_success=False,
+            partial_success=False,
+            timed_out=True,
+            step_results={
+                "order_context": StepResult(
+                    step_id="order_context",
+                    agent=AGENT_QUERY,
+                    task_type="order_query",
+                    status="FAILED",
+                    error_code="TIMEOUT",
+                )
+            },
         )
-        timeout_observation = {
-            "agent": AGENT_QUERY,
-            "success": False,
-            "data": {},
-            "error_msg": "timeout",
-            "timed_out": True,
-        }
         with patch.object(master_module, "route_master_task", return_value=route), patch.object(
-            master_module, "plan_sub_tasks_llm", new=AsyncMock(return_value=plan)
+            master_module.typed_master_planner, "plan", new=AsyncMock(return_value=plan)
         ), patch.object(
-            master_module, "react_decide", new=AsyncMock(return_value=decision)
+            master_module.MasterPlanExecutor, "execute", new=AsyncMock(return_value=execution)
         ), patch.object(
-            master_module, "_react_call_one", new=AsyncMock(return_value=timeout_observation)
-        ), patch.object(
-            master_module, "polish_final_output", new=AsyncMock(return_value="timeout")
+            master_module.recovery_controller,
+            "run",
+            new=AsyncMock(return_value=RecoveryDecision(action="finish", reason_code="TIMEOUT")),
         ), patch.object(master_module.mcp_bus, "send_msg", new=AsyncMock(return_value=True)) as send:
             await process_master_task(request, memory)
         return send.await_args_list[0].args[0].content["data"]
@@ -335,43 +344,44 @@ def test_complex_master_memory_is_compact_and_excludes_raw_payloads():
         route = MasterRouteDecision(
             mode="planner", confidence=0.4, reason_code="AMBIGUOUS"
         )
-        plan = PlanResult(
-            sub_tasks=[{"target_agent": AGENT_QUERY, "payload": {"query": "x"}}],
-            plan_confidence=0.95,
-            reasoning="short reason",
-            planner="test",
+        plan = MasterPlan(
+            decision="execute",
+            confidence=0.95,
+            reason_code="TEST",
+            planner_source="test",
+            steps=[PlanStep(step_id="order_context", agent=AGENT_QUERY, task_type="order_query")],
         )
-        decisions = [
-            ReactDecision(
-                thought="call", action="call_agent", agent=AGENT_QUERY, payload={}
-            ),
-            ReactDecision(thought="done", action="finish", final_answer="完成"),
-        ]
         memory = AsyncMock()
         memory.recall.return_value = []
-        observation = {
-            "agent": AGENT_QUERY,
-            "success": True,
-            "data": {"rows": list(range(100))},
-            "error_msg": "",
-            "timed_out": False,
-        }
+        execution = PlanExecutionResult(
+            all_success=True,
+            partial_success=False,
+            timed_out=False,
+            step_results={
+                "order_context": StepResult(
+                    step_id="order_context",
+                    agent=AGENT_QUERY,
+                    task_type="order_query",
+                    status="SUCCESS",
+                    success=True,
+                    data={"rows": list(range(100))},
+                )
+            },
+        )
         with patch.object(master_module, "route_master_task", return_value=route), patch.object(
-            master_module, "plan_sub_tasks_llm", new=AsyncMock(return_value=plan)
+            master_module.typed_master_planner, "plan", new=AsyncMock(return_value=plan)
         ), patch.object(
-            master_module, "react_decide", new=AsyncMock(side_effect=decisions)
-        ), patch.object(
-            master_module, "_react_call_one", new=AsyncMock(return_value=observation)
+            master_module.MasterPlanExecutor, "execute", new=AsyncMock(return_value=execution)
         ), patch.object(master_module.mcp_bus, "send_msg", new=AsyncMock(return_value=True)):
             await process_master_task(request, memory)
         return memory.safe_save_memory.await_args.kwargs
 
     saved = asyncio.run(scenario())
     content = json.loads(saved["content"])
-    assert set(content) == {"task_type", "route", "steps", "success", "latency_ms"}
-    assert set(content["steps"][0]) == {"agent", "success", "reason_code"}
+    assert set(content) == {"task_type", "plan", "step_statuses", "usage"}
+    assert set(content["plan"]) == {"reason_code", "confidence", "source", "steps"}
     serialized = json.dumps(content, ensure_ascii=False)
     assert "MUST_NOT_PERSIST" not in serialized
     assert "large raw history" not in serialized
     assert "rows" not in serialized
-    assert saved["meta"]["agents"] == [AGENT_QUERY]
+    assert saved["meta"]["mode"] == "plan"

@@ -28,37 +28,17 @@ from ecom_agent_matrix.config.constants import (
 from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.core.llm import is_llm_configured, llm_chat, resolve_mode
 from ecom_agent_matrix.core.logging_config import setup_logger
+from ecom_agent_matrix.modules.agent_cluster.master.policy import (
+    AGENT_ID_ALIASES,
+    AVAILABLE_AGENTS,
+    TASK_ROUTE_MAP,
+)
+from ecom_agent_matrix.modules.agent_cluster.master.prompts import (
+    PLANNER_SYSTEM_PROMPT,
+    RECOVERY_SYSTEM_PROMPT,
+)
 
 logger = setup_logger("agent.master_planner")
-
-AVAILABLE_AGENTS: dict[str, str] = {
-    AGENT_QUERY: (
-        "只读数据查询：广告数据、订单、库存、竞品价、商品目录/SKU。"
-        "内部自己解析商品名→SKU 并调用 DB Skill，不改业务状态。"
-    ),
-    AGENT_EXEC: (
-        "写操作与产物：调整广告出价、触发风控、生成运营报表、社媒文案。"
-        "会变更状态或产出运营物料。"
-    ),
-    AGENT_RAG: "文档知识库：店铺规则、运营手册、FAQ。只检索向量知识，不查业务表。",
-}
-
-# 细粒度 task_type → 唯一子 Agent（Master 不再按实体拆步）
-TASK_ROUTE_MAP: dict[str, list[str]] = {
-    "customer_service": [AGENT_EXEC],  # 客服回复 / 售后处理 → CRM workflow
-    "stock_analysis": [AGENT_QUERY],
-    "social_marketing": [AGENT_EXEC],
-    "competitor_watch": [AGENT_QUERY],
-    "goods_search": [AGENT_QUERY],
-    "goods_catalog": [AGENT_QUERY],
-    "knowledge_qa": [AGENT_RAG],
-    "ad_optimize": [AGENT_EXEC],
-    "ad_query": [AGENT_QUERY],
-    "data_check": [AGENT_QUERY],
-    "order_query": [AGENT_QUERY],
-    "ops_report": [AGENT_EXEC],
-    "risk_control": [AGENT_EXEC],
-}
 
 TASK_KEYWORDS: dict[str, list[str]] = {
     "knowledge_qa": [
@@ -118,75 +98,8 @@ TASK_KEYWORDS: dict[str, list[str]] = {
     ],
 }
 
-_AGENT_LIST_PROMPT = "\n".join(f"- {aid}: {desc}" for aid, desc in AVAILABLE_AGENTS.items())
-
-PLANNER_SYSTEM_PROMPT = f"""You are the Master Planning Agent for a cross-border ecommerce multi-agent system.
-You ONLY plan, dispatch and aggregate. Do NOT implement business logic.
-
-Available agents (use EXACT ids):
-{_AGENT_LIST_PROMPT}
-
-Return ONLY valid JSON, no markdown:
-{{
-  "decision": "dispatch or clarify",
-  "agents": ["agent_id1"],
-  "confidence": 0.85,
-  "reasoning": "brief decision reason in one sentence",
-  "clarification_question": "question when decision is clarify"
-}}
-
-Rules:
-- pick 1 agent in most cases; at most 2 (query then exec) if user both reads AND mutates
-- 查数据 / 有多少 / 库存 / 订单 / 竞品价 / 广告数据 → data_query
-- 调出价 / 改库存 / 触发风控 / 生成报表 / 写文案 → biz_exec
-- 店铺规则 / 运营手册 / FAQ / 退款规则 → knowledge_rag
-- 客服回复 / 售后处理 → biz_exec（CRM workflow）
-- 无法可靠判断 → decision=clarify，不调用任何 Agent
-- never pick entity agents like goods_lookup / stock_agent / ad_optimizer
-- use exact agent ids from the list above
-"""
-
-REACT_SYSTEM_PROMPT = f"""You are the Master ReAct controller.
-Decide the NEXT single action. You do planning/dispatch only.
-
-Available agents (use EXACT ids):
-{_AGENT_LIST_PROMPT}
-
-Return ONLY valid JSON:
-{{
-  "thought": "brief reasoning",
-  "action": "call_agent" or "finish",
-  "agent": "agent_id if call_agent else empty",
-  "skill": "",
-  "payload": {{}},
-  "final_answer": "summary when finish"
-}}
-
-Rules:
-- call only ONE agent per step
-- after data_query / biz_exec / knowledge_rag returns → finish (they resolve SKU internally)
-- do NOT call skills for DB or ads; those belong to sub-agents
-- payload may include query, sku, task_type
-"""
-
-# 旧实体 Agent / skill 名 → 任务类型 Agent
-_AGENT_ID_ALIASES: dict[str, str] = {
-    AGENT_GOODS: AGENT_QUERY,
-    AGENT_STOCK: AGENT_QUERY,
-    AGENT_DATA_CHECK: AGENT_QUERY,
-    AGENT_PRICE_WARN: AGENT_QUERY,
-    "stock_predict": AGENT_QUERY,
-    "data_integrity_check": AGENT_QUERY,
-    "goods_lookup": AGENT_QUERY,
-    "goods_rag": AGENT_RAG,
-    AGENT_AD: AGENT_EXEC,
-    AGENT_REPORT: AGENT_EXEC,
-    AGENT_SOCIAL: AGENT_EXEC,
-    AGENT_CRM: AGENT_EXEC,
-    "ops_report": AGENT_EXEC,
-    "ad_optimizer": AGENT_EXEC,
-    "customer_service": AGENT_EXEC,
-}
+_AGENT_ID_ALIASES = AGENT_ID_ALIASES
+REACT_SYSTEM_PROMPT = RECOVERY_SYSTEM_PROMPT
 
 
 @dataclass

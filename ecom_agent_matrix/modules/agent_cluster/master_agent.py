@@ -18,6 +18,11 @@ from ecom_agent_matrix.core.mcp.registry import register_agent
 from ecom_agent_matrix.core.mcp.reply import build_reply
 from ecom_agent_matrix.core.mcp.task_waiter import TaskReplyWaiter, is_agent_reply
 from ecom_agent_matrix.core.llm.output_polish import polish_final_output
+from ecom_agent_matrix.modules.agent_cluster.master.executor import MasterPlanExecutor
+from ecom_agent_matrix.modules.agent_cluster.master.planner import typed_master_planner
+from ecom_agent_matrix.modules.agent_cluster.master.react import recovery_controller
+from ecom_agent_matrix.modules.agent_cluster.master.schemas import PlanExecutionResult
+from ecom_agent_matrix.modules.agent_cluster.master.telemetry import MasterLLMTelemetry
 from ecom_agent_matrix.modules.agent_cluster.master_planner import (
     merge_observation_into_working,
     plan_sub_tasks_llm,
@@ -179,12 +184,192 @@ def _redact_sensitive_text(text: str) -> str:
     return re.sub(r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]+", "Bearer [REDACTED]", value)
 
 
-def _react_reason_code(action: str) -> str:
-    if action == "call_agent":
-        return "REACT_CALL_AGENT"
-    if action == "finish":
-        return "REACT_FINISH"
-    return "REACT_INVALID_ACTION"
+def _compat_llm_calls(usage: dict[str, Any]) -> dict[str, int]:
+    """保留 Phase 3A 字段；数据源仅来自真实 Provider telemetry。"""
+    return {
+        "planner": int(usage.get("planner", {}).get("calls", 0)),
+        "react": int(usage.get("recovery", {}).get("calls", 0)),
+        "polish": int(usage.get("polish", {}).get("calls", 0)),
+        "total": int(usage.get("calls", 0)),
+    }
+
+
+def _execution_summary(execution: PlanExecutionResult) -> str:
+    """优先返回最终业务步骤的自然语言结果，避免无意义 polish。"""
+    terminal = list(execution.step_results.values())
+    for result in reversed(terminal):
+        if result.status == "SUCCESS":
+            summary = _existing_summary(result.data)
+            if summary:
+                return summary
+    success_count = sum(item.status == "SUCCESS" for item in terminal)
+    if execution.all_success:
+        return f"任务已完成，{success_count}/{len(terminal)} 个步骤成功。"
+    return f"任务部分完成，{success_count}/{len(terminal)} 个步骤成功。"
+
+
+async def _save_plan_memory(
+    long_mem: AgentLongVectorMemory,
+    *,
+    task_type: str,
+    plan: Any,
+    execution: PlanExecutionResult,
+    usage: dict[str, Any],
+) -> None:
+    """Complex plan 仅保存紧凑状态，不持久化 payload/result/reasoning。"""
+    compact = {
+        "task_type": task_type,
+        "plan": {
+            "reason_code": plan.reason_code,
+            "confidence": plan.confidence,
+            "source": plan.planner_source,
+            "steps": [
+                {
+                    "step_id": step.step_id,
+                    "agent": step.agent,
+                    "task_type": step.task_type,
+                    "depends_on": step.depends_on,
+                }
+                for step in plan.steps
+            ],
+        },
+        "step_statuses": {
+            step_id: {
+                "status": result.status,
+                "error_code": result.error_code,
+                "latency_ms": result.latency_ms,
+            }
+            for step_id, result in execution.step_results.items()
+        },
+        "usage": usage,
+    }
+    await long_mem.safe_save_memory(
+        agent_name=AGENT_MASTER,
+        content=json.dumps(compact, ensure_ascii=False),
+        meta={
+            "task_type": task_type,
+            "mode": "plan",
+            "plan_confidence": plan.confidence,
+            "success": execution.all_success,
+            "verified": False,
+            "deprecated": False,
+        },
+    )
+
+
+async def _process_complex_plan(
+    msg: MCPMessage,
+    long_mem: AgentLongVectorMemory,
+    route: MasterRouteDecision,
+    task_input: dict[str, Any],
+    started: float,
+) -> None:
+    telemetry = MasterLLMTelemetry()
+    plan = await typed_master_planner.plan(task_input, telemetry)
+    if plan.decision == "clarify":
+        usage = telemetry.snapshot().model_dump()
+        calls = _compat_llm_calls(usage)
+        result = {
+            "task_id": msg.task_id,
+            "mode": "clarify",
+            "expected": 0,
+            "received": 0,
+            "timed_out": False,
+            "all_success": True,
+            "partial_success": False,
+            "step_results": {},
+            "summary": plan.clarification_question,
+            "plan": plan.model_dump(),
+            "route": route.model_dump(),
+            "master_llm_usage": usage,
+            "master_llm_calls": calls,
+            "metadata": {
+                "master_llm_usage": usage,
+                "master_llm_calls": calls,
+                "master_memory": "skipped_clarify",
+            },
+        }
+        await mcp_bus.send_msg(
+            build_reply(
+                msg,
+                sender=AGENT_MASTER,
+                success=True,
+                data=result,
+                msg_type="master_task_result",
+            )
+        )
+        return
+
+    execution = await MasterPlanExecutor().execute(plan, msg)
+    recovery = (
+        await recovery_controller.run(execution, telemetry)
+        if not execution.all_success
+        else None
+    )
+    summary = ""
+    if recovery is not None:
+        summary = recovery.final_answer or recovery.clarification_question
+    if not summary:
+        summary = _execution_summary(execution)
+
+    usage = telemetry.snapshot().model_dump()
+    calls = _compat_llm_calls(usage)
+    step_results = {
+        step_id: item.model_dump()
+        for step_id, item in execution.step_results.items()
+    }
+    result = {
+        "task_id": msg.task_id,
+        "mode": "plan",
+        "expected": len(plan.steps),
+        "received": sum(
+            item.status in {"SUCCESS", "FAILED"}
+            for item in execution.step_results.values()
+        ),
+        "timed_out": execution.timed_out,
+        "all_success": execution.all_success,
+        "partial_success": execution.partial_success,
+        "step_results": step_results,
+        "sub_results": list(step_results.values()),
+        "summary": summary,
+        "plan": plan.model_dump(),
+        "route": route.model_dump(),
+        "recovery": recovery.model_dump() if recovery is not None else None,
+        "master_llm_usage": usage,
+        "master_llm_calls": calls,
+        "metadata": {
+            "master_llm_usage": usage,
+            "master_llm_calls": calls,
+            "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+        },
+    }
+    await mcp_bus.send_msg(
+        build_reply(
+            msg,
+            sender=AGENT_MASTER,
+            success=execution.all_success,
+            data=result,
+            error_msg="" if execution.all_success else "部分计划步骤未成功",
+            msg_type="master_task_result",
+        )
+    )
+    try:
+        await _save_plan_memory(
+            long_mem,
+            task_type=str(task_input.get("task_type") or "unknown"),
+            plan=plan,
+            execution=execution,
+            usage=usage,
+        )
+    except Exception as exc:
+        logger.warning(
+            "master_memory_save_failed",
+            extra={
+                "event": "master_memory_save_failed",
+                "task_id": msg.task_id,
+                "error_type": type(exc).__name__,
+            },
+        )
 
 
 async def execute_fast_path(
@@ -193,6 +378,7 @@ async def execute_fast_path(
 ) -> dict[str, Any]:
     """单次 Agent dispatch；不进入 Planner、ReAct 或 Master Memory。"""
     started = time.perf_counter()
+    telemetry = MasterLLMTelemetry()
     target_agent = route.target_agents[0]
     payload = {**dict(msg.content or {}), "task_type": route.task_type}
     if route.task_type == "goods_catalog":
@@ -207,9 +393,7 @@ async def execute_fast_path(
     timed_out = bool(observation.get("timed_out"))
     success = bool(observation.get("success")) and not timed_out
     summary = _existing_summary(observation.get("data") or {})
-    polish_calls = 0
     if not summary:
-        polish_calls = 1
         summary = await polish_final_output(
             success=success,
             data=observation.get("data") or {},
@@ -217,9 +401,12 @@ async def execute_fast_path(
             user_query=str(msg.content.get("query") or msg.content.get("user_query") or ""),
             reply_from=AGENT_MASTER,
             prefer_existing_answer=True,
+            on_provider_start=lambda: telemetry.start_call("polish"),
+            on_provider_result=lambda result: telemetry.add_result("polish", result),
         )
 
-    calls = _llm_call_metadata(polish=polish_calls)
+    usage = telemetry.snapshot().model_dump()
+    calls = _compat_llm_calls(usage)
     return {
         "task_id": msg.task_id,
         "mode": "fast_path",
@@ -238,8 +425,10 @@ async def execute_fast_path(
         "summary": summary,
         "route": route.model_dump(),
         "master_llm_calls": calls,
+        "master_llm_usage": usage,
         "metadata": {
             "master_llm_calls": calls,
+            "master_llm_usage": usage,
             "latency_ms": round((time.perf_counter() - started) * 1000, 2),
             "master_memory": "skipped_fast_path",
         },
@@ -283,6 +472,7 @@ async def process_master_task(msg: MCPMessage, long_mem: AgentLongVectorMemory) 
 
     if route.mode == "clarify":
         clarification = "请说明您要查询的数据、咨询的店铺规则，或需要执行的业务操作。"
+        usage = MasterLLMTelemetry().snapshot().model_dump()
         calls = _llm_call_metadata()
         final_result = {
             "task_id": task_id,
@@ -295,8 +485,13 @@ async def process_master_task(msg: MCPMessage, long_mem: AgentLongVectorMemory) 
             "react_trace": [],
             "summary": clarification,
             "route": route.model_dump(),
+            "master_llm_usage": usage,
             "master_llm_calls": calls,
-            "metadata": {"master_llm_calls": calls, "master_memory": "skipped_clarify"},
+            "metadata": {
+                "master_llm_usage": usage,
+                "master_llm_calls": calls,
+                "master_memory": "skipped_clarify",
+            },
         }
         await mcp_bus.send_msg(
             build_reply(
@@ -327,311 +522,8 @@ async def process_master_task(msg: MCPMessage, long_mem: AgentLongVectorMemory) 
         )
         return
 
-    memory_hits: list[dict] = []
-    try:
-        memory_hits = await long_mem.recall(
-            query_text=json.dumps(task_descriptor, ensure_ascii=False),
-            agent_name=AGENT_MASTER,
-            top_k=2,
-        )
-    except Exception as exc:
-        logger.warning(
-            "master_memory_recall_failed",
-            extra={
-                "event": "master_memory_recall_failed",
-                "task_id": task_id,
-                "error_type": type(exc).__name__,
-            },
-        )
-
-    planner_calls = 1
-    react_calls = 0
-    polish_calls = 0
-    plan = await plan_sub_tasks_llm(task_input, memory_hits)
-    suggested_agents = [s["target_agent"] for s in plan.sub_tasks]
-
-    logger.info(
-        "master_plan_done",
-        extra={
-            "event": "master_plan_done",
-            "task_id": task_id,
-            "planner": plan.planner,
-            "plan_confidence": plan.plan_confidence,
-            "agents": suggested_agents,
-        },
-    )
-
-    if plan.decision == "clarify":
-        clarification = plan.clarification_question or "请补充您想查询或处理的具体业务内容。"
-        final_result = {
-            "task_id": task_id,
-            "mode": "clarify",
-            "expected": 0,
-            "received": 0,
-            "timed_out": False,
-            "all_success": True,
-            "sub_results": [],
-            "react_trace": [],
-            "summary": clarification,
-            "plan": {
-                "decision": "clarify",
-                "planner": plan.planner,
-                "plan_confidence": plan.plan_confidence,
-                "reasoning": plan.reasoning,
-                "agents": [],
-                "reason_code": route.reason_code,
-            },
-            "route": route.model_dump(),
-            "master_llm_calls": _llm_call_metadata(planner=planner_calls),
-            "metadata": {
-                "master_llm_calls": _llm_call_metadata(planner=planner_calls),
-                "master_memory": "skipped_clarify",
-            },
-        }
-        await mcp_bus.send_msg(
-            build_reply(
-                msg,
-                sender=AGENT_MASTER,
-                success=True,
-                data=final_result,
-                msg_type="master_task_result",
-            )
-        )
-        logger.info(
-            "master_task_clarify",
-            extra={"event": "master_task_clarify", "task_id": task_id},
-        )
-        return
-
-    working = dict(plan.sub_tasks[0]["payload"]) if plan.sub_tasks else dict(task_input)
-    observations: list[dict] = []
-    react_trace: list[dict] = []
-    max_steps = int(settings.MASTER_REACT_MAX_STEPS)
-    finished_normally = False
-    terminal_error = False
-    final_answer = ""
-
-    for step in range(1, max_steps + 1):
-        react_calls += 1
-        decision = await react_decide(working, observations, suggested_agents)
-        react_trace.append(
-            {
-                "step": step,
-                "reason_code": _react_reason_code(decision.action),
-                "confidence": decision.confidence,
-                "action": decision.action,
-                "agent": decision.agent,
-                "skill": decision.skill,
-                "source": decision.source,
-            }
-        )
-        logger.info(
-            "master_react_step",
-            extra={
-                "event": "master_react_step",
-                "task_id": task_id,
-                "reason_code": _react_reason_code(decision.action),
-                "query": (
-                    f"step={step} action={decision.action} "
-                    f"agent={decision.agent} skill={decision.skill}"
-                ),
-            },
-        )
-
-        if decision.action == "finish":
-            react_trace[-1]["result"] = {"final_answer": decision.final_answer}
-            finished_normally = True
-            final_answer = str(decision.final_answer or "").strip()
-            break
-
-        if decision.action != "call_agent" or not decision.agent:
-            react_trace[-1]["result"] = {
-                "success": False,
-                "error_msg": "非法 ReAct 动作，提前结束",
-            }
-            terminal_error = True
-            break
-
-        obs = await _react_call_one(task_id, decision.agent, decision.payload, msg.priority)
-        observations.append(obs)
-        working = merge_observation_into_working(working, obs)
-        react_trace[-1]["result"] = {
-            "success": obs.get("success"),
-            "error_msg": obs.get("error_msg", ""),
-        }
-
-        # 关键失败且后续依赖该结果时，规则层会在下一步 finish；此处也可提前跳出
-        if obs.get("timed_out"):
-            break
-
-    else:
-        finished_normally = True
-        final_answer = "达到最大步数，强制结束"
-        react_trace.append(
-            {
-                "step": max_steps + 1,
-                "decision_reason": "达到 ReAct 最大步数",
-                "confidence": 1.0,
-                "action": "finish",
-                "agent": "",
-                "skill": "",
-                "source": "rules",
-                "result": {"final_answer": "达到最大步数，强制结束"},
-            }
-        )
-
-    expected = len(observations)
-    timed_out = any(o.get("timed_out") for o in observations)
-    all_success = (
-        finished_normally
-        and not terminal_error
-        and not timed_out
-        and all(o.get("success") for o in observations)
-    )
-    final_result = {
-        "task_id": task_id,
-        "mode": "react",
-        "expected": expected,
-        "received": len(observations),
-        "timed_out": timed_out,
-        "all_success": all_success,
-        "sub_results": [
-            {
-                "agent": o.get("agent"),
-                "success": o.get("success", False),
-                "data": o.get("data", {}),
-                "error_msg": o.get("error_msg", ""),
-            }
-            for o in observations
-        ],
-        "react_trace": react_trace,
-        "working_sku": working.get("sku"),
-        "plan": {
-            "decision": plan.decision,
-            "planner": plan.planner,
-            "plan_confidence": plan.plan_confidence,
-            "reasoning": plan.reasoning,
-            "agents": suggested_agents,
-            "reason_code": route.reason_code,
-        },
-        "route": route.model_dump(),
-    }
-    elapsed_ms = (time.perf_counter() - started) * 1000
-
-    summary = final_answer
-    if not summary and observations:
-        summary = _existing_summary(observations[-1].get("data") or {})
-    if not summary:
-        polish_calls = 1
-        summary = await polish_final_output(
-            success=final_result["all_success"] and not final_result["timed_out"],
-            data=final_result,
-            error_msg=(
-                "部分子任务超时或未成功"
-                if final_result["timed_out"] or not final_result["all_success"]
-                else ""
-            ),
-            user_query=str(task_input.get("query") or task_input.get("user_query") or ""),
-            reply_from=AGENT_MASTER,
-            prefer_existing_answer=True,
-        )
-    final_result["summary"] = summary
-    calls = _llm_call_metadata(
-        planner=planner_calls,
-        react=react_calls,
-        polish=polish_calls,
-    )
-    final_result["master_llm_calls"] = calls
-    final_result["metadata"] = {"master_llm_calls": calls}
-
-    reply = build_reply(
-        msg,
-        sender=AGENT_MASTER,
-        success=final_result["all_success"] and not final_result["timed_out"],
-        data=final_result,
-        error_msg=(
-            "部分子任务超时或未成功"
-            if final_result["timed_out"] or not final_result["all_success"]
-            else ""
-        ),
-        msg_type="master_task_result",
-    )
-    await mcp_bus.send_msg(reply)
-
-    save_ok, mem_confidence = should_save_to_memory(plan.plan_confidence, final_result)
-    if save_ok:
-        memory_task_type = (
-            task_type
-            if task_type != "unknown"
-            else working.get("_inferred_task_type") or working.get("task_type") or "unknown"
-        )
-        await long_mem.safe_save_memory(
-            agent_name=AGENT_MASTER,
-            content=json.dumps(
-                {
-                    "task_type": memory_task_type,
-                    "route": suggested_agents,
-                    "steps": [
-                        {
-                            "agent": item.get("agent"),
-                            "success": bool(item.get("success")),
-                            "reason_code": (
-                                "AGENT_SUCCESS" if item.get("success") else "AGENT_FAILED"
-                            ),
-                        }
-                        for item in observations
-                    ],
-                    "success": final_result["all_success"],
-                    "latency_ms": round(elapsed_ms, 2),
-                },
-                ensure_ascii=False,
-            ),
-            meta={
-                "task_type": memory_task_type,
-                "planner": plan.planner,
-                "plan_confidence": plan.plan_confidence,
-                "confidence": mem_confidence,
-                "memory_hits_used": len(memory_hits),
-                "latency_ms": round(elapsed_ms, 2),
-                "mode": "react",
-                "agents": suggested_agents,
-                "sku": working.get("sku"),
-                "success": final_result["all_success"],
-                "verified": False,
-                "deprecated": False,
-            },
-        )
-        logger.info(
-            "master_memory_saved",
-            extra={
-                "event": "master_memory_saved",
-                "task_id": task_id,
-                "confidence": mem_confidence,
-            },
-        )
-    else:
-        logger.info(
-            "master_memory_skipped",
-            extra={
-                "event": "master_memory_skipped",
-                "task_id": task_id,
-                "plan_confidence": plan.plan_confidence,
-                "memory_confidence": mem_confidence,
-                "all_success": final_result["all_success"],
-                "timed_out": final_result["timed_out"],
-            },
-        )
-
-    logger.info(
-        "master_task_done",
-        extra={
-            "event": "master_task_done",
-            "task_id": task_id,
-            "recall_count": final_result["received"],
-            "latency_ms": round(elapsed_ms, 2),
-        },
-    )
-
+    await _process_complex_plan(msg, long_mem, route, task_input, started)
+    return
 
 async def safe_process_master_task(
     msg: MCPMessage,
@@ -661,6 +553,7 @@ async def safe_process_master_task(
             "all_success": False,
             "sub_results": [],
             "summary": "master task failed",
+            "master_llm_usage": MasterLLMTelemetry().snapshot().model_dump(),
             "master_llm_calls": _llm_call_metadata(),
             "metadata": {"master_llm_calls": _llm_call_metadata()},
         }

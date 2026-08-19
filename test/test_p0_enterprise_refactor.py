@@ -13,6 +13,12 @@ from ecom_agent_matrix.core.mcp.reply import build_reply
 from ecom_agent_matrix.core.mcp.task_waiter import TaskReplyWaiter
 from ecom_agent_matrix.core.skill.skill_registry import exec_skill, skill_execution_context
 from ecom_agent_matrix.modules.agent_cluster.master_agent import _react_call_one, process_master_task
+from ecom_agent_matrix.modules.agent_cluster.master.schemas import (
+    MasterPlan,
+    PlanExecutionResult,
+    PlanStep,
+    StepResult,
+)
 from ecom_agent_matrix.modules.agent_cluster.master_planner import (
     PlanResult,
     ReactDecision,
@@ -174,16 +180,16 @@ def test_unknown_request_returns_clarify_without_rag_dispatch():
         )
         long_mem = AsyncMock()
         long_mem.recall.return_value = []
-        clarify = PlanResult(
-            sub_tasks=[],
-            plan_confidence=0.3,
-            reasoning="无法可靠识别",
-            planner="clarify",
+        clarify = MasterPlan(
             decision="clarify",
+            steps=[],
+            confidence=0.3,
+            reason_code="UNKNOWN",
             clarification_question="请补充具体需求。",
+            planner_source="test",
         )
         with patch(
-            "ecom_agent_matrix.modules.agent_cluster.master_agent.plan_sub_tasks_llm",
+            "ecom_agent_matrix.modules.agent_cluster.master_agent.typed_master_planner.plan",
             new=AsyncMock(return_value=clarify),
         ), patch(
             "ecom_agent_matrix.modules.agent_cluster.master_agent._dispatch_subtask",
@@ -374,46 +380,36 @@ def test_master_react_trace_does_not_persist_reasoning_content():
             target=AGENT_MASTER,
             content={"query": "查订单"},
         )
-        plan = PlanResult(
-            sub_tasks=[{"target_agent": AGENT_QUERY, "payload": {"query": "查订单"}}],
-            plan_confidence=0.95,
-            reasoning="订单查询",
-            planner="test",
+        plan = MasterPlan(
+            decision="execute",
+            confidence=0.95,
+            reason_code="ORDER_QUERY",
+            planner_source="test",
+            steps=[PlanStep(step_id="order_context", agent=AGENT_QUERY, task_type="order_query")],
         )
-        decisions = [
-            ReactDecision(
-                thought="查询订单",
-                action="call_agent",
-                agent=AGENT_QUERY,
-                payload={"query": "查订单"},
-                reasoning_content="NEVER STORE THIS",
-            ),
-            ReactDecision(
-                thought="完成",
-                action="finish",
-                final_answer="完成",
-                reasoning_content="NEVER STORE THIS EITHER",
-            ),
-        ]
+        execution = PlanExecutionResult(
+            all_success=True,
+            partial_success=False,
+            timed_out=False,
+            step_results={
+                "order_context": StepResult(
+                    step_id="order_context",
+                    agent=AGENT_QUERY,
+                    task_type="order_query",
+                    status="SUCCESS",
+                    success=True,
+                    data={"answer": "完成"},
+                )
+            },
+        )
         long_mem = AsyncMock()
         long_mem.recall.return_value = []
         with patch(
-            "ecom_agent_matrix.modules.agent_cluster.master_agent.plan_sub_tasks_llm",
+            "ecom_agent_matrix.modules.agent_cluster.master_agent.typed_master_planner.plan",
             new=AsyncMock(return_value=plan),
         ), patch(
-            "ecom_agent_matrix.modules.agent_cluster.master_agent.react_decide",
-            new=AsyncMock(side_effect=decisions),
-        ), patch(
-            "ecom_agent_matrix.modules.agent_cluster.master_agent._react_call_one",
-            new=AsyncMock(
-                return_value={
-                    "agent": AGENT_QUERY,
-                    "success": True,
-                    "data": {"answer": "完成"},
-                    "error_msg": "",
-                    "timed_out": False,
-                }
-            ),
+            "ecom_agent_matrix.modules.agent_cluster.master_agent.MasterPlanExecutor.execute",
+            new=AsyncMock(return_value=execution),
         ), patch(
             "ecom_agent_matrix.modules.agent_cluster.master_agent.polish_final_output",
             new=AsyncMock(return_value="完成"),
