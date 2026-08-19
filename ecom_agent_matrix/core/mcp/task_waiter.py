@@ -45,9 +45,18 @@ class TaskReplyWaiter:
             await asyncio.wait_for(buf["event"].wait(), timeout=timeout)
         except asyncio.TimeoutError:
             pass
-        replies = list(buf["replies"])
-        cls._pending.pop(correlation_id, None)
-        return replies
+        finally:
+            cls._pending.pop(correlation_id, None)
+        return list(buf["replies"])
+
+    @classmethod
+    def discard(cls, correlation_id: str) -> bool:
+        """幂等清理等待槽，供 dispatch 异常/任务取消路径调用。"""
+        buf = cls._pending.pop(correlation_id, None)
+        if not buf:
+            return False
+        buf["event"].set()
+        return True
 
     @classmethod
     def pending_count(cls, correlation_id: str) -> int:

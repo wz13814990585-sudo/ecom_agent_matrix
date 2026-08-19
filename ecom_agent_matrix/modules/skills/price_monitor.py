@@ -1,4 +1,4 @@
-"""竞品价格监控 Skill：入库、算偏移，并按阈值判定是否告警。"""
+"""竞品价格 Skill：只读监控计算与显式写入分离。"""
 from __future__ import annotations
 
 from decimal import Decimal
@@ -32,7 +32,7 @@ class CompetitorPriceMonitor(BaseSkill):
     risk_level = "medium"
     skill_name = "price_monitor"
     skill_desc = (
-        "竞品价格写入并判定告警，参数 target_sku、competitor、compete_price、"
+        "只读查询竞品历史价格并判定告警，参数 target_sku、competitor、compete_price、"
         "可选 warn_threshold（<=0，默认 -10）"
     )
 
@@ -44,15 +44,6 @@ class CompetitorPriceMonitor(BaseSkill):
             warn_threshold, thr_err = _parse_warn_threshold(params.get("warn_threshold", -10))
             if thr_err:
                 return SkillResult(success=False, error_msg=thr_err)
-
-            insert_sql = """
-            INSERT INTO competitor_price(target_sku, competitor_name, compete_price)
-            VALUES (%s, %s, %s) RETURNING id;
-            """
-            insert_row = await AsyncPGClient.execute_sql(
-                insert_sql, [target_sku, competitor, compete_price]
-            )
-            record_id = insert_row[0][0]
 
             min_sql = "SELECT MIN(compete_price) FROM competitor_price WHERE target_sku = %s;"
             min_price_row = await AsyncPGClient.execute_sql(min_sql, [target_sku])
@@ -72,7 +63,6 @@ class CompetitorPriceMonitor(BaseSkill):
             return SkillResult(
                 success=True,
                 data={
-                    "record_id": record_id,
                     "history_min_compete_price": history_min,
                     "current_price_offset": price_diff,
                     "compete_price": compete_price,
@@ -87,3 +77,47 @@ class CompetitorPriceMonitor(BaseSkill):
             return SkillResult(success=False, error_msg=f"竞品价格必须为数字：{e}")
         except Exception as e:
             return SkillResult(success=False, error_msg=f"竞品监控异常：{e}")
+
+
+@register_skill
+class RecordCompetitorPrice(BaseSkill):
+    """显式写入一条竞品价格记录，仅允许 Exec context 调用。"""
+
+    read_only = False
+    side_effect = True
+    risk_level = "medium"
+    skill_name = "record_competitor_price"
+    skill_desc = "记录新的竞品价格，参数 target_sku、competitor、compete_price"
+
+    async def run(self, params: dict) -> SkillResult:
+        try:
+            target_sku = str(params["target_sku"]).strip()
+            competitor = str(params["competitor"]).strip()
+            compete_price = _as_float(params["compete_price"])
+            if not target_sku or not competitor:
+                return SkillResult(success=False, error_msg="target_sku / competitor 不能为空")
+
+            insert_sql = """
+            INSERT INTO competitor_price(target_sku, competitor_name, compete_price)
+            VALUES (%s, %s, %s) RETURNING id;
+            """
+            rows = await AsyncPGClient.execute_sql(
+                insert_sql,
+                [target_sku, competitor, compete_price],
+            )
+            record_id = rows[0][0] if rows and rows[0] else None
+            return SkillResult(
+                success=True,
+                data={
+                    "record_id": record_id,
+                    "target_sku": target_sku,
+                    "competitor": competitor,
+                    "compete_price": compete_price,
+                },
+            )
+        except KeyError as exc:
+            return SkillResult(success=False, error_msg=f"缺失参数：{exc}")
+        except (TypeError, ValueError) as exc:
+            return SkillResult(success=False, error_msg=f"竞品价格必须为数字：{exc}")
+        except Exception as exc:
+            return SkillResult(success=False, error_msg=f"竞品价格记录失败：{exc}")

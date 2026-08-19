@@ -133,8 +133,11 @@ async def _react_call_one(
     """ReAct 单步：下发一个 Agent → 等待回传 → 返回 observation。"""
     correlation_id = str(uuid.uuid4())
     TaskReplyWaiter.begin(correlation_id, 1)
-    await _dispatch_subtask(task_id, correlation_id, target_agent, payload, priority)
-    replies = await TaskReplyWaiter.wait(correlation_id, timeout=float(settings.MCP_TIMEOUT))
+    try:
+        await _dispatch_subtask(task_id, correlation_id, target_agent, payload, priority)
+        replies = await TaskReplyWaiter.wait(correlation_id, timeout=float(settings.MCP_TIMEOUT))
+    finally:
+        TaskReplyWaiter.discard(correlation_id)
     timed_out = len(replies) < 1
     reply = replies[0] if replies else None
     return _observation_from_reply(reply, target_agent, timed_out)

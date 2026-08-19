@@ -232,27 +232,6 @@ async def handle_price_warn(payload: dict) -> tuple[bool, str, dict]:
     thr = data.get("warn_threshold", warn_threshold)
 
     if is_warn:
-        await long_mem.safe_save_memory(
-            agent_name=AGENT_QUERY,
-            content=(
-                f"告警 sku:{target_sku} competitor:{competitor} "
-                f"price:{compete_price} offset:{current_offset} "
-                f"threshold:{thr} msg:{warn_msg}"
-            ),
-            meta={
-                "sku": target_sku,
-                "competitor": competitor,
-                "compete_price": compete_price,
-                "current_price_offset": current_offset,
-                "warn_threshold": thr,
-                "is_trigger_warn": True,
-                "success": True,
-                "confidence": 0.85,
-                "deprecated": False,
-            },
-        )
-
-    if is_warn:
         explain_fallback = (
             f"竞品 {competitor} 对 {target_sku} 报价 {compete_price}，"
             f"相对历史最低偏移 {current_offset}（阈值 {thr}）。"

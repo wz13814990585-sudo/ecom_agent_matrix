@@ -57,17 +57,23 @@ async def exec_skill(skill_name: str, params: dict) -> SkillResult:
         )
     skill_cls = skill_container[skill_name]
     context = _execution_context.get()
+    is_pure_read = skill_cls.read_only is True and skill_cls.side_effect is False
 
-    # Query 权限严格 fail-closed：只有显式 read_only=True 且 side_effect=False 才允许。
-    if context and context.agent_id == AGENT_QUERY:
-        if skill_cls.read_only is not True or skill_cls.side_effect is not False:
-            return SkillResult(
-                success=False,
-                error_msg=f"data_query 无权执行非只读 Skill：{skill_name}",
-            )
+    # 无调用主体时只允许明确的纯只读 Skill，写 Skill 必须由 Exec context 执行。
+    if context is None and not is_pure_read:
+        return SkillResult(
+            success=False,
+            error_msg=f"缺少 SkillExecutionContext，拒绝执行 write Skill：{skill_name}",
+        )
+
+    if context and context.agent_id == AGENT_QUERY and not is_pure_read:
+        return SkillResult(
+            success=False,
+            error_msg=f"data_query 无权执行非只读 Skill：{skill_name}",
+        )
 
     # Exec 保留现有业务能力；具体允许调用哪些 Skill 仍由既有 workflow 决定。
-    if context and context.agent_id not in {AGENT_QUERY, AGENT_EXEC}:
+    if context is not None and context.agent_id not in {AGENT_QUERY, AGENT_EXEC}:
         return SkillResult(
             success=False,
             error_msg=f"未授权的 Skill execution context：{context.agent_id}",
