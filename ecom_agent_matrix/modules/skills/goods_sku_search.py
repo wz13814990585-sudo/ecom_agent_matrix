@@ -194,6 +194,7 @@ class GoodsSkuSearchTool(BaseSkill):
     read_only = True
     side_effect = False
     risk_level = "low"
+    timeout_seconds = 15.0
     idempotent = True
     input_model = GoodsSkuSearchInput
     output_model = GoodsSkuSearchOutput
@@ -241,11 +242,11 @@ class GoodsSkuSearchTool(BaseSkill):
                 try:
                     semantic_hits = await _semantic_vector_search(product_name, top_k)
                 except Exception as exc:
-                    semantic_error = str(exc)
+                    semantic_error = type(exc).__name__
                     if force_semantic:
                         return SkillResult(
                             success=False,
-                            error_msg=f"向量语义检索失败：{exc}",
+                            error_msg=f"向量语义检索失败：{type(exc).__name__}",
                         )
 
             candidates = _merge_candidates(literal_hits, semantic_hits, top_k)
@@ -271,4 +272,4 @@ class GoodsSkuSearchTool(BaseSkill):
         except ValueError:
             return SkillResult(success=False, error_msg="top_k 必须为整数")
         except Exception as exc:
-            return SkillResult(success=False, error_msg=f"商品检索异常：{exc}")
+            return SkillResult(success=False, error_msg=f"商品检索异常：{type(exc).__name__}")

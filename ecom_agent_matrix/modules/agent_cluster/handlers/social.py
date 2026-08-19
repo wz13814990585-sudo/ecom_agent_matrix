@@ -23,7 +23,7 @@ from ecom_agent_matrix.modules.parsers.social import (
     normalize_social_platform,
     parse_social_request,
 )
-from ecom_agent_matrix.modules.skills.social_media import SUPPORTED_PLATFORMS
+from ecom_agent_matrix.modules.parsers.social import SUPPORTED_PLATFORMS
 
 # 兼容此前可能使用的 public helper 名称；解析实现位于 domain parser。
 normalize_platform = normalize_social_platform

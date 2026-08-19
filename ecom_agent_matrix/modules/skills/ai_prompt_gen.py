@@ -1,6 +1,8 @@
 """AI 绘图提示词 Skill（LLM，无 Key 时模板兜底）。"""
 from __future__ import annotations
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from ecom_agent_matrix.core.llm import current_provider_name, is_llm_configured, llm_chat
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
@@ -12,6 +14,22 @@ Rules:
 - No quotation marks, no markdown, no explanation
 - Single paragraph, under 80 words
 """
+
+
+class AIPromptGenInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    product: str = Field(min_length=1)
+    scene: str = Field(default="e-commerce product shooting", min_length=1)
+    style: str = Field(default="bright commercial", min_length=1)
+
+
+class AIPromptGenOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    positive_prompt: str
+    source: str
+    llm_error: str
 
 
 def _template_prompt(product: str, scene: str, style: str) -> str:
@@ -26,6 +44,10 @@ class AIPromptGenTool(BaseSkill):
     read_only = True
     side_effect = False
     risk_level = "low"
+    timeout_seconds = 45.0
+    idempotent = False
+    input_model = AIPromptGenInput
+    output_model = AIPromptGenOutput
     skill_name = "ai_prompt_generate"
     skill_desc = "商品 AI 绘图提示词生成（LLM），参数 product、scene、style"
 
@@ -64,7 +86,7 @@ class AIPromptGenTool(BaseSkill):
                     else:
                         llm_error = "empty_content"
                 except Exception as exc:
-                    llm_error = str(exc)
+                    llm_error = type(exc).__name__
 
             return SkillResult(
                 success=True,
@@ -77,4 +99,4 @@ class AIPromptGenTool(BaseSkill):
         except KeyError as err:
             return SkillResult(success=False, error_msg=f"缺失参数：{err}")
         except Exception as exc:
-            return SkillResult(success=False, error_msg=f"绘图提示词生成失败：{exc}")
+            return SkillResult(success=False, error_msg=f"绘图提示词生成失败：{type(exc).__name__}")

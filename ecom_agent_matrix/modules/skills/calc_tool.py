@@ -29,6 +29,7 @@ class ProfitCalcTool(BaseSkill):
     read_only = True
     side_effect = False
     risk_level = "low"
+    timeout_seconds = 5.0
     idempotent = True
     input_model = ProfitCalcInput
     output_model = ProfitCalcOutput

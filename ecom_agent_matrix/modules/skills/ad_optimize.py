@@ -3,12 +3,43 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from ecom_agent_matrix.core.llm import current_provider_name, is_llm_configured, llm_chat
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
 
 SUPPORTED_AD_PLATFORMS = frozenset({"meta", "google", "tiktok", "amazon"})
+
+
+class AdOptimizeInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, allow_inf_nan=False)
+
+    sku: str | None = None
+    target_sku: str | None = None
+    campaign_id: str | None = None
+    platform: Literal["meta", "google", "tiktok", "amazon"] = "meta"
+    spend: float = Field(default=0, ge=0)
+    clicks: float = Field(default=0, ge=0)
+    conversions: float = Field(default=0, ge=0)
+    revenue: float = Field(default=0, ge=0)
+    target_roas: float = Field(default=2.0, gt=0)
+    daily_budget: float | None = Field(default=None, ge=0)
+    bid: float | None = Field(default=None, ge=0)
+
+
+class AdOptimizeOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sku: str
+    campaign_id: str
+    platform: str
+    plan: dict[str, Any]
+    suggested: dict[str, float]
+    source: str
+    llm_error: str
 
 AD_SYSTEM_PROMPT = """You are a cross-border ecommerce paid-ads optimizer.
 Given campaign metrics, return ONLY valid JSON (no markdown):
@@ -113,6 +144,10 @@ class AdOptimizeTool(BaseSkill):
     read_only = True
     side_effect = False
     risk_level = "medium"
+    timeout_seconds = 45.0
+    idempotent = False
+    input_model = AdOptimizeInput
+    output_model = AdOptimizeOutput
     skill_name = "ad_optimize"
     skill_desc = (
         "广告投放优化建议，参数 sku/campaign_id、platform(meta/google/tiktok/amazon)、"
@@ -185,7 +220,7 @@ class AdOptimizeTool(BaseSkill):
                     }
                     source = raw.provider or current_provider_name()
                 except Exception as exc:
-                    llm_error = str(exc)
+                    llm_error = type(exc).__name__
 
             # 应用建议到预算/出价（若有输入）
             suggested = {}
@@ -211,4 +246,4 @@ class AdOptimizeTool(BaseSkill):
                 },
             )
         except Exception as exc:
-            return SkillResult(success=False, error_msg=f"广告优化失败：{exc}")
+            return SkillResult(success=False, error_msg=f"广告优化失败：{type(exc).__name__}")

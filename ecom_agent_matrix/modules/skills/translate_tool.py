@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from ecom_agent_matrix.config.constants import LANG_LIST
 from ecom_agent_matrix.core.llm import current_provider_name, llm_chat
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
@@ -23,6 +25,23 @@ TRANSLATE_SYSTEM_PROMPT = (
     "Translate product titles, descriptions, and customer-service text accurately. "
     "Return ONLY the translated text. No quotes, no explanation, no language tags."
 )
+
+
+class TranslateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    text: str = Field(min_length=1)
+    target_lang: str = Field(min_length=2)
+
+
+class TranslateOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str
+    source_lang: str
+    target_lang: str
+    source_text: str
+    trans_text: str
 
 
 def detect_source_lang(text: str) -> str:
@@ -77,6 +96,10 @@ class TranslateTool(BaseSkill):
     read_only = True
     side_effect = False
     risk_level = "low"
+    timeout_seconds = 45.0
+    idempotent = False
+    input_model = TranslateInput
+    output_model = TranslateOutput
     skill_name = "text_translate"
     skill_desc = "多语种电商文本翻译（LLM），参数 text / target_lang"
 
@@ -109,5 +132,5 @@ class TranslateTool(BaseSkill):
             return SkillResult(success=False, error_msg=f"缺少参数：{e}")
         except ValueError as e:
             return SkillResult(success=False, error_msg=str(e))
-        except Exception as e:
-            return SkillResult(success=False, error_msg=f"翻译失败：{e}")
+        except Exception as exc:
+            return SkillResult(success=False, error_msg=f"翻译失败：{type(exc).__name__}")

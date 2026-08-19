@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from ecom_agent_matrix.core.tasking import TaskContext
-from ecom_agent_matrix.modules.skills.sql_tool import nl_to_readonly_sql
+from ecom_agent_matrix.core.sql import nl_to_readonly_sql
 
 _ORDER_PATTERN = re.compile(r"\b(?:ORD[-_][A-Z0-9_-]+|\d{10,20})\b", re.IGNORECASE)
 _SKU_PATTERN = re.compile(r"\bSKU[-_][A-Z0-9_-]+\b", re.IGNORECASE)

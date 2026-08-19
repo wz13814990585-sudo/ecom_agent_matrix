@@ -7,7 +7,9 @@ from pydantic import BaseModel, ConfigDict
 
 from ecom_agent_matrix.config.constants import LANG_LIST
 from ecom_agent_matrix.core.tasking import TaskContext
-from ecom_agent_matrix.modules.skills.social_media import SUPPORTED_PLATFORMS
+SUPPORTED_PLATFORMS = frozenset(
+    {"tiktok", "instagram", "facebook", "twitter", "youtube"}
+)
 
 _PLATFORM_ALIASES = {
     "tiktok": "tiktok",

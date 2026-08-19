@@ -7,7 +7,46 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from ecom_agent_matrix.core.tasking import TaskContext
-from ecom_agent_matrix.modules.skills.goods_catalog import is_catalog_query, wants_full_catalog
+
+_CATALOG_HINT = re.compile(
+    r"(有多少(?:个)?商品|多少(?:个)?商品|商品数量|商品总数|一共有?(?:多少)?商品|"
+    r"列出(?:全部|所有)?商品|有哪些商品|全部商品|所有商品|商品列表|商品目录|"
+    r"数据库.*商品|库里.*商品|查(?:询)?.*商品表|商品表|查询数据库|查一下?库|"
+    r"数据库里有|库里有什么|看看数据库|how\s+many\s+products?|"
+    r"list\s+(?:all\s+)?products?|product\s+catalog|all\s+skus?|"
+    r"sku\s+count|count\s+(?:of\s+)?(?:goods|products?)|"
+    r"query\s+(?:the\s+)?(?:database|db)|what.?s\s+in\s+(?:the\s+)?(?:database|db))",
+    re.IGNORECASE,
+)
+_FULL_LIST_HINT = re.compile(
+    r"(全部|所有|完整|一整[个份]|都列|列全|展示全部|显示全部|"
+    r"list\s+all|show\s+all|all\s+products?|entire\s+catalog|full\s+list)",
+    re.IGNORECASE,
+)
+_COUNT_ONLY_HINT = re.compile(
+    r"(有多少|多少个|数量|总数|一共|how\s+many|"
+    r"count\s+(?:of\s+)?(?:goods|products?)|sku\s+count)",
+    re.IGNORECASE,
+)
+
+
+def is_catalog_query(text: str) -> bool:
+    """是否为商品目录数量/列表意图。"""
+    value = str(text or "")
+    return bool(re.search(r"外部站|外部店铺|市场商品", value, re.I) or _CATALOG_HINT.search(value))
+
+
+def wants_full_catalog(text: str) -> bool:
+    """是否明确要求完整商品列表。"""
+    value = str(text or "")
+    if _FULL_LIST_HINT.search(value):
+        return True
+    if re.search(r"有哪些商品|列出.*商品|商品列表|商品目录|list\s+products?", value, re.I):
+        return not (
+            _COUNT_ONLY_HINT.search(value)
+            and not re.search(r"哪些|列出|列表|list", value, re.I)
+        )
+    return False
 
 
 class GoodsRequest(BaseModel):

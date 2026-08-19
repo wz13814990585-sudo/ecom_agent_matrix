@@ -1,7 +1,30 @@
 """拓展：库存预测工具。"""
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
 from ecom_agent_matrix.db.base import AsyncPGClient
+
+
+class StockPredictInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    sku: str = Field(min_length=1)
+    predict_days: int = Field(default=7, ge=1, le=90)
+    history_records: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class StockPredictOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    daily_avg_sales: float = Field(ge=0)
+    predict_cycle: int = Field(ge=1)
+    suggest_stock_amount: int = Field(ge=0)
+    base_suggest_stock_amount: int = Field(ge=0)
+    history_used: int = Field(ge=0)
+    history_adjusted: bool
 
 
 @register_skill
@@ -9,6 +32,10 @@ class StockPredictTool(BaseSkill):
     read_only = True
     side_effect = False
     risk_level = "low"
+    timeout_seconds = 15.0
+    idempotent = True
+    input_model = StockPredictInput
+    output_model = StockPredictOutput
     skill_name = "stock_predict"
     skill_desc = (
         "商品库存备货预测，参数 sku、predict_days（默认7）、"

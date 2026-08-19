@@ -23,9 +23,13 @@ class SkillSpec(BaseModel):
     idempotent: bool = False
     input_model: type[BaseModel] | None = None
     output_model: type[BaseModel] | None = None
+    deprecated: bool = False
+    replacement: str | None = None
 
     @model_validator(mode="after")
     def validate_access_metadata(self) -> "SkillSpec":
         if self.read_only and self.side_effect:
             raise ValueError("read_only=True 时 side_effect 必须=False")
+        if self.deprecated and not (self.replacement or "").strip():
+            raise ValueError("deprecated Skill 必须声明 replacement")
         return self

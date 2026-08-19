@@ -3,6 +3,10 @@ from __future__ import annotations
 
 import re
 
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
 from ecom_agent_matrix.config.constants import TABLE_GOODS
 from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
@@ -12,36 +16,6 @@ from ecom_agent_matrix.db.base import AsyncPGClient
 # 单次最多返回条数，防止响应过大
 MAX_CATALOG_LIMIT = 500
 DEFAULT_PAGE_LIMIT = 20
-
-_CATALOG_HINT = re.compile(
-    r"("
-    r"有多少(?:个)?商品|多少(?:个)?商品|商品数量|商品总数|一共有?(?:多少)?商品|"
-    r"列出(?:全部|所有)?商品|有哪些商品|全部商品|所有商品|商品列表|商品目录|"
-    r"数据库.*商品|库里.*商品|查(?:询)?.*商品表|商品表|"
-    r"查询数据库|查一下?库|数据库里有|库里有什么|看看数据库|"
-    r"how\s+many\s+products?|list\s+(?:all\s+)?products?|product\s+catalog|"
-    r"all\s+skus?|sku\s+count|count\s+(?:of\s+)?(?:goods|products?)|"
-    r"query\s+(?:the\s+)?(?:database|db)|what.?s\s+in\s+(?:the\s+)?(?:database|db)"
-    r")",
-    re.IGNORECASE,
-)
-
-_FULL_LIST_HINT = re.compile(
-    r"("
-    r"全部|所有|完整|一整[个份]|都列|列全|展示全部|显示全部|"
-    r"list\s+all|show\s+all|all\s+products?|entire\s+catalog|full\s+list"
-    r")",
-    re.IGNORECASE,
-)
-
-_COUNT_ONLY_HINT = re.compile(
-    r"("
-    r"有多少|多少个|数量|总数|一共|"
-    r"how\s+many|count\s+(?:of\s+)?(?:goods|products?)|sku\s+count"
-    r")",
-    re.IGNORECASE,
-)
-
 
 def resolve_catalog_scope(text: str = "", store_id: str | None = None) -> tuple[str, str]:
     """
@@ -80,25 +54,41 @@ def resolve_catalog_scope(text: str = "", store_id: str | None = None) -> tuple[
     return "own", (settings.DEMO_STORE_ID or "demo_store")
 
 
-def is_catalog_query(text: str) -> bool:
-    """是否为「查全库数量/列表」意图（区别于按商品名搜索）。"""
-    t = str(text or "")
-    if re.search(r"外部站|外部店铺|市场商品", t, re.I):
-        return True
-    return bool(_CATALOG_HINT.search(t))
+class GoodsCatalogInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    offset: int = Field(default=0, ge=0)
+    limit: int | None = Field(default=None, ge=1, le=MAX_CATALOG_LIMIT)
+    top_k: int | None = Field(default=None, ge=1, le=MAX_CATALOG_LIMIT)
+    category: str | None = None
+    order_by: Literal["stock", "price", "id"] = "id"
+    list_all: bool = False
+    query: str | None = None
+    user_query: str | None = None
+    product_name: str | None = None
+    store_id: str | None = None
+    scope: str | None = None
 
 
-def wants_full_catalog(text: str) -> bool:
-    """用户是否明确要求看全部商品（而非默认分页预览）。"""
-    t = str(text or "")
-    if _FULL_LIST_HINT.search(t):
-        return True
-    # 「有哪些商品 / 列出商品 / 商品列表」视为要列表；若同时只问数量则不算全量
-    if re.search(r"有哪些商品|列出.*商品|商品列表|商品目录|list\s+products?", t, re.I):
-        if _COUNT_ONLY_HINT.search(t) and not re.search(r"哪些|列出|列表|list", t, re.I):
-            return False
-        return True
-    return False
+class GoodsCatalogOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["catalog"]
+    scope: Literal["own", "external", "all", "platform"]
+    store_id: str | None
+    store_name: str
+    is_demo_store: bool
+    is_external: bool
+    total: int = Field(ge=0)
+    count: int = Field(ge=0)
+    limit: int = Field(ge=0)
+    offset: int = Field(ge=0)
+    list_all: bool
+    truncated: bool
+    category: str | None
+    order_by: Literal["stock", "price", "id"]
+    items: list[dict[str, Any]]
+    summary: str
 
 
 @register_skill
@@ -106,6 +96,10 @@ class GoodsCatalogTool(BaseSkill):
     read_only = True
     side_effect = False
     risk_level = "low"
+    timeout_seconds = 15.0
+    idempotent = True
+    input_model = GoodsCatalogInput
+    output_model = GoodsCatalogOutput
     skill_name = "goods_catalog"
     skill_desc = (
         "商品目录查询：统计 ecom_goods 数量并列出；"
@@ -124,9 +118,6 @@ class GoodsCatalogTool(BaseSkill):
                 or params.get("product_name")
                 or ""
             )
-            if not list_all:
-                list_all = wants_full_catalog(query_text)
-
             if "limit" in params and params.get("limit") is not None:
                 limit = int(params.get("limit"))
             elif "top_k" in params and params.get("top_k") is not None:
@@ -259,4 +250,4 @@ class GoodsCatalogTool(BaseSkill):
         except ValueError:
             return SkillResult(success=False, error_msg="limit/offset 必须为整数")
         except Exception as exc:
-            return SkillResult(success=False, error_msg=f"商品目录查询失败：{exc}")
+            return SkillResult(success=False, error_msg=f"商品目录查询失败：{type(exc).__name__}")

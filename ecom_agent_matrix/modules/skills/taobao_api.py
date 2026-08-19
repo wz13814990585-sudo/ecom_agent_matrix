@@ -3,13 +3,40 @@ from __future__ import annotations
 
 import hashlib
 import time
+from typing import Any
 from urllib.parse import urlencode
 
 import httpx
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from ecom_agent_matrix.config.settings import settings
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
+
+
+class TaobaoApiInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    method: str = Field(min_length=1)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class TaobaoApiOutput(BaseModel):
+    """验证外部 JSON 是对象，同时保持旧版扁平返回形状。"""
+
+    model_config = ConfigDict(extra="forbid")
+    data: dict[str, Any]
+
+    @model_validator(mode="before")
+    @classmethod
+    def wrap_response(cls, value):
+        if isinstance(value, dict) and set(value) != {"data"}:
+            return {"data": value}
+        return value
+
+    @model_serializer
+    def serialize_response(self) -> dict[str, Any]:
+        return self.data
 
 
 def _top_sign(params: dict[str, str], secret: str) -> str:
@@ -26,6 +53,10 @@ class TaobaoApiTool(BaseSkill):
     read_only = False
     side_effect = True
     risk_level = "high"
+    timeout_seconds = 30.0
+    idempotent = False
+    input_model = TaobaoApiInput
+    output_model = TaobaoApiOutput
     skill_name = "taobao_api"
     skill_desc = (
         "淘宝开放平台接口调用，参数 method=TOP 方法名（如 taobao.trade.fullinfo.get）、"
@@ -92,5 +123,5 @@ class TaobaoApiTool(BaseSkill):
                 return SkillResult(success=False, error_msg=f"淘宝 API 错误 [{code}]: {msg}", data=data)
 
             return SkillResult(success=True, data=data)
-        except Exception as e:
-            return SkillResult(success=False, error_msg=f"接口请求失败：{str(e)}")
+        except Exception as exc:
+            return SkillResult(success=False, error_msg=f"接口请求失败：{type(exc).__name__}")

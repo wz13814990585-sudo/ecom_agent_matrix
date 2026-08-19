@@ -47,7 +47,7 @@ def test_risk_buy_num_legacy_alias():
     assert request.buy_count == 3
 
 
-def test_risk_workflow_calls_order_risk_skill():
+def test_risk_workflow_calls_evaluate_risk_skill():
     success = SkillResult(success=True, data={"is_risk": False})
     async def scenario():
         with patch("ecom_agent_matrix.modules.agent_cluster.handlers.risk.exec_skill", new=AsyncMock(return_value=success)) as execute:
@@ -55,16 +55,16 @@ def test_risk_workflow_calls_order_risk_skill():
         return result, execute.await_args.args
     result, args = asyncio.run(scenario())
     assert result.success is True
-    assert args == ("order_risk_check", {"order_no": "ORD-1", "total_amount": 10.0, "buy_count": 1})
+    assert args == ("evaluate_order_risk", {"order_no": "ORD-1", "total_amount": 10.0, "buy_count": 1})
 
 
-def test_query_context_cannot_execute_risk_write_skill():
+def test_query_context_can_evaluate_non_risk_order_without_write():
     async def scenario():
         with skill_execution_context(AGENT_QUERY):
             return await run_risk_workflow({"order_no": "ORD-1", "total_amount": 10, "buy_count": 1})
     result = asyncio.run(scenario())
-    assert result.success is False
-    assert result.metadata["skill_error_code"] == "PERMISSION_DENIED"
+    assert result.success is True
+    assert result.data["record"]["skipped"] is True
 
 
 def test_exec_context_can_execute_risk_write_skill():

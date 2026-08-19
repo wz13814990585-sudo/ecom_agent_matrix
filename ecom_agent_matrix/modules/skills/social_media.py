@@ -1,12 +1,15 @@
 """社媒文案生成 Skill（LLM，无 Key 时模板兜底）。"""
 from __future__ import annotations
 
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
 from ecom_agent_matrix.config.constants import LANG_LIST
 from ecom_agent_matrix.core.llm import current_provider_name, is_llm_configured, llm_chat
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
-
-SUPPORTED_PLATFORMS = frozenset({"tiktok", "instagram", "facebook", "twitter", "youtube"})
+from ecom_agent_matrix.modules.parsers.social import SUPPORTED_PLATFORMS
 
 LANG_NAME = {
     "en": "English",
@@ -14,6 +17,25 @@ LANG_NAME = {
     "es": "Spanish",
     "fr": "French",
 }
+
+
+class SocialMediaCopyInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    product_name: str = Field(min_length=1)
+    feature: str = Field(min_length=1)
+    platform: Literal["tiktok", "instagram", "facebook", "twitter", "youtube"]
+    lang: str = Field(default="en", min_length=1)
+
+
+class SocialMediaCopyOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    copy_draft: str
+    platform: str
+    lang: str
+    source: str
+    llm_error: str
 
 COPY_SYSTEM_PROMPT = """You are a cross-border ecommerce social media copywriter.
 Write ONE short promotional caption for the given platform and language.
@@ -44,6 +66,10 @@ class SocialMediaCopyTool(BaseSkill):
     read_only = True
     side_effect = False
     risk_level = "low"
+    timeout_seconds = 45.0
+    idempotent = False
+    input_model = SocialMediaCopyInput
+    output_model = SocialMediaCopyOutput
     skill_name = "social_media_gen"
     skill_desc = (
         "社媒带货文案生成（LLM），参数 product_name、feature、platform"
@@ -98,7 +124,7 @@ class SocialMediaCopyTool(BaseSkill):
                     else:
                         llm_error = "empty_content"
                 except Exception as exc:
-                    llm_error = str(exc)
+                    llm_error = type(exc).__name__
 
             return SkillResult(
                 success=True,
@@ -113,4 +139,4 @@ class SocialMediaCopyTool(BaseSkill):
         except KeyError as e:
             return SkillResult(success=False, error_msg=f"缺失参数：{e}")
         except Exception as exc:
-            return SkillResult(success=False, error_msg=f"社媒文案生成失败：{exc}")
+            return SkillResult(success=False, error_msg=f"社媒文案生成失败：{type(exc).__name__}")

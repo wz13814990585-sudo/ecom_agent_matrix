@@ -22,6 +22,7 @@ VALIDATION_ERROR = "VALIDATION_ERROR"
 TIMEOUT = "TIMEOUT"
 EXECUTION_ERROR = "EXECUTION_ERROR"
 OUTPUT_VALIDATION_ERROR = "OUTPUT_VALIDATION_ERROR"
+SKILL_FAILED = "SKILL_FAILED"
 
 logger = logging.getLogger("skill.executor")
 
@@ -50,6 +51,15 @@ class SkillExecutor:
             )
 
         spec = skill_cls.spec()
+        if spec.deprecated:
+            logger.warning(
+                "deprecated_skill_execution",
+                extra={
+                    "event": "deprecated_skill_execution",
+                    "skill_name": skill_name,
+                    "replacement": spec.replacement or "",
+                },
+            )
         denied_reason = self._permission_denied_reason(spec, effective_context)
         if denied_reason:
             return self._error(
@@ -58,6 +68,7 @@ class SkillExecutor:
                 skill_name,
                 started,
                 effective_context,
+                spec=spec,
             )
 
         try:
@@ -65,10 +76,11 @@ class SkillExecutor:
         except (ValidationError, TypeError, ValueError) as exc:
             return self._error(
                 VALIDATION_ERROR,
-                f"Skill 输入参数校验失败：{exc}",
+                f"Skill 输入参数校验失败：{type(exc).__name__}",
                 skill_name,
                 started,
                 effective_context,
+                spec=spec,
             )
 
         try:
@@ -83,6 +95,7 @@ class SkillExecutor:
                 skill_name,
                 started,
                 effective_context,
+                spec=spec,
             )
         except Exception as exc:
             logger.exception(
@@ -100,6 +113,7 @@ class SkillExecutor:
                 skill_name,
                 started,
                 effective_context,
+                spec=spec,
             )
 
         if not isinstance(raw_result, SkillResult):
@@ -109,6 +123,7 @@ class SkillExecutor:
                 skill_name,
                 started,
                 effective_context,
+                spec=spec,
             )
 
         if raw_result.success and spec.output_model is not None:
@@ -118,14 +133,25 @@ class SkillExecutor:
             except (ValidationError, TypeError, ValueError) as exc:
                 return self._error(
                     OUTPUT_VALIDATION_ERROR,
-                    f"Skill 输出数据校验失败：{exc}",
+                    f"Skill 输出数据校验失败：{type(exc).__name__}",
                     skill_name,
                     started,
                     effective_context,
+                    spec=spec,
                 )
 
+        if not raw_result.success and not raw_result.error_code:
+            raw_result.error_code = SKILL_FAILED
+
+        contract_metadata: dict[str, Any] = {}
+        if spec.deprecated:
+            contract_metadata = {
+                "deprecated": True,
+                "replacement": spec.replacement,
+            }
         raw_result.metadata = {
             **raw_result.metadata,
+            **contract_metadata,
             **self._metadata(skill_name, started, effective_context),
         }
         self._log_result(raw_result)
@@ -171,12 +197,19 @@ class SkillExecutor:
         skill_name: str,
         started: float,
         context: SkillExecutionContext | None,
+        *,
+        spec=None,
     ) -> SkillResult:
+        metadata = self._metadata(skill_name, started, context)
+        if spec is not None and spec.deprecated:
+            metadata.update(
+                {"deprecated": True, "replacement": spec.replacement}
+            )
         result = SkillResult(
             success=False,
             error_code=error_code,
             error_msg=error_msg,
-            metadata=self._metadata(skill_name, started, context),
+            metadata=metadata,
         )
         self._log_result(result)
         return result

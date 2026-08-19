@@ -77,6 +77,7 @@ class CompetitorPriceMonitor(BaseSkill):
     read_only = True
     side_effect = False
     risk_level = "medium"
+    timeout_seconds = 10.0
     idempotent = True
     input_model = PriceMonitorInput
     output_model = PriceMonitorOutput
@@ -125,8 +126,8 @@ class CompetitorPriceMonitor(BaseSkill):
             return SkillResult(success=False, error_msg=f"缺失参数：{e}")
         except (TypeError, ValueError) as e:
             return SkillResult(success=False, error_msg=f"竞品价格必须为数字：{e}")
-        except Exception as e:
-            return SkillResult(success=False, error_msg=f"竞品监控异常：{e}")
+        except Exception as exc:
+            return SkillResult(success=False, error_msg=f"竞品监控异常：{type(exc).__name__}")
 
 
 @register_skill
@@ -136,6 +137,7 @@ class RecordCompetitorPrice(BaseSkill):
     read_only = False
     side_effect = True
     risk_level = "medium"
+    timeout_seconds = 10.0
     idempotent = False
     input_model = RecordCompetitorPriceInput
     output_model = RecordCompetitorPriceOutput
@@ -173,4 +175,4 @@ class RecordCompetitorPrice(BaseSkill):
         except (TypeError, ValueError) as exc:
             return SkillResult(success=False, error_msg=f"竞品价格必须为数字：{exc}")
         except Exception as exc:
-            return SkillResult(success=False, error_msg=f"竞品价格记录失败：{exc}")
+            return SkillResult(success=False, error_msg=f"竞品价格记录失败：{type(exc).__name__}")

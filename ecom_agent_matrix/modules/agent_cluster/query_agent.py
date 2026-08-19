@@ -24,7 +24,7 @@ from ecom_agent_matrix.modules.agent_cluster.handlers import (
     handle_price_warn,
     handle_stock,
 )
-from ecom_agent_matrix.modules.skills.goods_catalog import is_catalog_query
+from ecom_agent_matrix.modules.parsers.goods import is_catalog_query
 from ecom_agent_matrix.modules.parsers.stock import extract_stock_sku
 
 logger = setup_logger("agent.query")

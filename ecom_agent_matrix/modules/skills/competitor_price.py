@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 import aiohttp
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ecom_agent_matrix.config.constants import TABLE_COMPETITOR, TABLE_GOODS
 from ecom_agent_matrix.config.settings import settings
@@ -31,6 +32,52 @@ _PLATFORM_FACTOR = {
     "rei": 1.08,
     "walmart": 0.95,
 }
+
+
+class CompetitorPriceInput(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", str_strip_whitespace=True, populate_by_name=True
+    )
+
+    target_sku: str | None = None
+    sku: str | None = None
+    product_sku: str | None = None
+    goods_sku: str | None = None
+    best_sku: str | None = None
+    competitor: str | None = None
+    competitor_name: str | None = None
+    platform: str | None = None
+    query: str | None = None
+    user_query: str | None = None
+    text: str | None = None
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
+    goods_candidates: list[dict[str, Any]] = Field(
+        default_factory=list, alias="_goods_candidates"
+    )
+
+    @model_validator(mode="after")
+    def require_direct_identifiers(self) -> "CompetitorPriceInput":
+        sku_values = (self.target_sku, self.sku, self.product_sku, self.goods_sku, self.best_sku)
+        competitor_values = (self.competitor, self.competitor_name, self.platform)
+        if not any(sku_values) and not any((self.query, self.user_query, self.text, self.candidates)):
+            raise ValueError("缺少 SKU 信息")
+        if not any(competitor_values) and not any((self.query, self.user_query, self.text)):
+            raise ValueError("缺少 competitor 信息")
+        return self
+
+
+class CompetitorPriceOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    target_sku: str
+    sku: str
+    competitor: str
+    compete_price: float = Field(gt=0)
+    currency: str
+    source_ref: str
+    price_source: str
+    fetch_mode: str
+    adapter_error: str | None
 
 
 def _norm_competitor(name: str) -> str:
@@ -167,17 +214,17 @@ async def _fetch_http_adapter(
             async with session.get(url, headers=headers) as resp:
                 text = await resp.text()
                 if resp.status >= 400:
-                    return None, "USD", "", f"适配器 HTTP {resp.status}: {text[:200]}"
+                    return None, "USD", "", f"适配器 HTTP {resp.status}"
                 try:
                     body = json.loads(text) if text else {}
                 except json.JSONDecodeError:
-                    return None, "USD", "", f"适配器返回非 JSON: {text[:120]}"
+                    return None, "USD", "", "适配器返回非 JSON"
                 price, currency, source_ref = _extract_price_from_payload(body)
                 if price is None:
                     return None, currency, source_ref, "适配器响应缺少 compete_price/price"
                 return price, currency, source_ref or url, ""
     except Exception as exc:
-        return None, "USD", "", f"适配器请求失败: {exc}"
+        return None, "USD", "", f"适配器请求失败: {type(exc).__name__}"
 
 
 async def _resolve_demo_price(sku: str, competitor: str) -> tuple[float, str, str]:
@@ -196,6 +243,10 @@ class CompetitorPriceTool(BaseSkill):
     read_only = True
     side_effect = False
     risk_level = "medium"
+    timeout_seconds = 30.0
+    idempotent = False
+    input_model = CompetitorPriceInput
+    output_model = CompetitorPriceOutput
     skill_name = "competitor_price"
     skill_desc = (
         "竞品价格查询：输入 target_sku + competitor，输出 compete_price；"
@@ -273,4 +324,4 @@ class CompetitorPriceTool(BaseSkill):
                 },
             )
         except Exception as exc:
-            return SkillResult(success=False, error_msg=f"竞品价格查询异常：{exc}")
+            return SkillResult(success=False, error_msg=f"竞品价格查询异常：{type(exc).__name__}")

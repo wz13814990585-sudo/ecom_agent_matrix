@@ -89,7 +89,12 @@ def extract_sku(payload: dict) -> str:
         if val is not None and str(val).strip():
             return str(val).strip()
 
-    candidates = payload.get("_goods_candidates") or payload.get("candidates") or []
+    candidates = (
+        payload.get("_goods_candidates")
+        or payload.get("goods_candidates")
+        or payload.get("candidates")
+        or []
+    )
     if isinstance(candidates, list) and candidates:
         first = candidates[0]
         if isinstance(first, dict) and first.get("sku"):

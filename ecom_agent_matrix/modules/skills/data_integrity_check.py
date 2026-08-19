@@ -1,12 +1,38 @@
 """业务数据完整性校验 Skill。"""
 from __future__ import annotations
 
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
 from ecom_agent_matrix.config.constants import TABLE_GOODS, TABLE_ORDER
 from ecom_agent_matrix.core.skill.base_skill import BaseSkill, SkillResult
 from ecom_agent_matrix.core.skill.skill_registry import register_skill
 from ecom_agent_matrix.db.base import AsyncPGClient
 
 SUPPORTED_SCOPES = frozenset({"goods", "order", "full"})
+
+
+class DataIntegrityCheckInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    scope: Literal["goods", "order", "full"] = "full"
+    sku: str | None = None
+    target_sku: str | None = None
+    order_no: str | None = None
+    limit: int = Field(default=50, ge=1, le=500)
+
+
+class DataIntegrityCheckOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope: str
+    sku: str | None
+    order_no: str | None
+    issue_count: int = Field(ge=0)
+    passed: bool
+    issue_types: dict[str, int]
+    issues: list[dict[str, Any]]
 
 
 async def _check_goods(sku: str | None = None, limit: int = 50) -> list[dict]:
@@ -113,6 +139,10 @@ class DataIntegrityCheckTool(BaseSkill):
     read_only = True
     side_effect = False
     risk_level = "medium"
+    timeout_seconds = 15.0
+    idempotent = True
+    input_model = DataIntegrityCheckInput
+    output_model = DataIntegrityCheckOutput
     skill_name = "data_integrity_check"
     skill_desc = (
         "电商数据完整性校验，参数 scope=goods|order|full、"
@@ -159,4 +189,4 @@ class DataIntegrityCheckTool(BaseSkill):
         except ValueError:
             return SkillResult(success=False, error_msg="limit 必须为整数")
         except Exception as exc:
-            return SkillResult(success=False, error_msg=f"数据校验异常：{exc}")
+            return SkillResult(success=False, error_msg=f"数据校验异常：{type(exc).__name__}")

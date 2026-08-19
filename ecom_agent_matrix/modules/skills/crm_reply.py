@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import re
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ecom_agent_matrix.config.constants import LANG_LIST
 from ecom_agent_matrix.core.llm import is_llm_configured, llm_chat
@@ -24,6 +27,36 @@ _KNOWLEDGE_HINT = re.compile(
     r"背包|商品|款式|faq|how to|what is|material|care|wash|fabric)",
     re.IGNORECASE,
 )
+
+
+class CrmReplyInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    user_query: str | None = None
+    query: str | None = None
+    lang: str = "zh"
+    history: list[dict[str, Any]] = Field(default_factory=list)
+    use_rag: bool | None = None
+    taobao_info: dict[str, Any] = Field(default_factory=dict)
+    is_fallback_route: bool = False
+    task_id: str | None = None
+
+    @model_validator(mode="after")
+    def require_query(self) -> "CrmReplyInput":
+        if not (self.user_query or self.query):
+            raise ValueError("user_query 为空")
+        return self
+
+
+class CrmReplyOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    answer: str
+    llm_ok: bool
+    rag_used: bool
+    rag_doc_count: int = Field(ge=0)
+    rag_error: str
+    llm_error: str = ""
 
 
 def should_use_rag(user_query: str, use_rag_flag) -> bool:
@@ -82,7 +115,7 @@ async def retrieve_rag_docs(
         )
         return list(docs or []), ""
     except Exception as exc:
-        return [], str(exc)
+        return [], type(exc).__name__
 
 
 @register_skill
@@ -90,6 +123,10 @@ class CrmReplyTool(BaseSkill):
     read_only = True
     side_effect = False
     risk_level = "low"
+    timeout_seconds = 60.0
+    idempotent = False
+    input_model = CrmReplyInput
+    output_model = CrmReplyOutput
     skill_name = "crm_reply"
     skill_desc = (
         "客服答复生成：参数 user_query、lang、history、use_rag、taobao_info、"
@@ -174,8 +211,8 @@ class CrmReplyTool(BaseSkill):
                             "llm_ok": False,
                             "rag_used": rag_used,
                             "rag_doc_count": len(rag_docs),
-                            "rag_error": rag_error or str(exc),
-                            "llm_error": str(exc),
+                            "rag_error": rag_error or type(exc).__name__,
+                            "llm_error": type(exc).__name__,
                         },
                     )
 
@@ -200,4 +237,4 @@ class CrmReplyTool(BaseSkill):
                 },
             )
         except Exception as exc:
-            return SkillResult(success=False, error_msg=f"客服答复失败：{exc}")
+            return SkillResult(success=False, error_msg=f"客服答复失败：{type(exc).__name__}")

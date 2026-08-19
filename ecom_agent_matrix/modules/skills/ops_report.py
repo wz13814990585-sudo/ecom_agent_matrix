@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from ecom_agent_matrix.config.constants import (
     TABLE_COMPETITOR,
@@ -17,6 +20,28 @@ from ecom_agent_matrix.core.skill.skill_registry import register_skill
 from ecom_agent_matrix.db.base import AsyncPGClient
 
 SUPPORTED_REPORT_TYPES = frozenset({"daily_ops", "sales", "stock", "risk", "full"})
+
+
+class OpsReportInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    report_type: Literal["daily_ops", "sales", "stock", "risk", "full"] = "daily_ops"
+    days: int = Field(default=7, ge=1, le=90)
+    top_k: int = Field(default=5, ge=1, le=20)
+    lang: str = Field(default="zh", min_length=1)
+
+
+class OpsReportOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    report_type: str
+    days: int = Field(ge=1)
+    sections: dict[str, Any]
+    summary: str
+    structured: dict[str, Any]
+    source: str
+    lang: str
+    llm_error: str
 
 
 def _extract_json(text: str) -> dict:
@@ -193,6 +218,10 @@ class OpsReportTool(BaseSkill):
     read_only = True
     side_effect = False
     risk_level = "medium"
+    timeout_seconds = 60.0
+    idempotent = False
+    input_model = OpsReportInput
+    output_model = OpsReportOutput
     skill_name = "ops_report"
     skill_desc = (
         "运营报表聚合，参数 report_type=daily_ops|sales|stock|risk|full、"
@@ -276,7 +305,7 @@ class OpsReportTool(BaseSkill):
                     else:
                         llm_error = "empty_content"
                 except Exception as exc:
-                    llm_error = str(exc)
+                    llm_error = type(exc).__name__
 
             return SkillResult(
                 success=True,
@@ -300,4 +329,4 @@ class OpsReportTool(BaseSkill):
         except ValueError:
             return SkillResult(success=False, error_msg="days/top_k 必须为整数")
         except Exception as exc:
-            return SkillResult(success=False, error_msg=f"报表生成失败：{exc}")
+            return SkillResult(success=False, error_msg=f"报表生成失败：{type(exc).__name__}")

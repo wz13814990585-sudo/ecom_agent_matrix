@@ -280,7 +280,7 @@ def infer_task_type_from_query(query: str) -> str | None:
     if not text:
         return None
 
-    from ecom_agent_matrix.modules.skills.goods_catalog import is_catalog_query
+    from ecom_agent_matrix.modules.parsers.goods import is_catalog_query
 
     if is_catalog_query(text):
         return "goods_catalog"

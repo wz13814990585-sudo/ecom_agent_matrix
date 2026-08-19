@@ -31,6 +31,8 @@ class BaseSkill(ABC):
     idempotent: bool = False
     input_model: type[BaseModel] | None = None
     output_model: type[BaseModel] | None = None
+    deprecated: bool = False
+    replacement: str | None = None
 
     @classmethod
     def spec(cls) -> SkillSpec:
@@ -46,6 +48,8 @@ class BaseSkill(ABC):
             idempotent=cls.idempotent,
             input_model=cls.input_model,
             output_model=cls.output_model,
+            deprecated=cls.deprecated,
+            replacement=cls.replacement,
         )
 
     @abstractmethod
