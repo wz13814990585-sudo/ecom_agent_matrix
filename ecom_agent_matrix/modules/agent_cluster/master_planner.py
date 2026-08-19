@@ -203,7 +203,7 @@ class PlanResult:
 @dataclass
 class ReactDecision:
     thought: str
-    action: str  # call_agent | call_skill | finish
+    action: str  # call_agent | finish；其他旧动作运行时拒绝
     agent: str = ""
     skill: str = ""
     payload: dict = field(default_factory=dict)
@@ -502,7 +502,7 @@ async def plan_sub_tasks_llm(task_input: dict, memory_hits: list[dict]) -> PlanR
     except Exception as exc:
         fallback = plan_sub_tasks_keyword(task_input, memory_hits)
         fallback.planner = "keyword_llm_fallback"
-        fallback.reasoning = f"LLM 规划失败({exc})，回退关键词路由或请求澄清"
+        fallback.reasoning = f"LLM 规划失败({type(exc).__name__})，回退关键词路由或请求澄清"
         return fallback
 
 
@@ -633,7 +633,6 @@ async def react_decide(
             "react_decide_fallback",
             extra={
                 "event": "react_decide_fallback",
-                "error": str(exc),
                 "error_type": type(exc).__name__,
             },
         )

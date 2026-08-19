@@ -127,7 +127,9 @@ class Settings(BaseSettings):
     REPORT_SKILL_TIMEOUT: float = 30.0
 
     # Master Agent 配置
+    MASTER_MAX_CONCURRENT: int = 8  # 用户级 Master 总任务并发上限
     MASTER_MAX_SUBTASK_CONCURRENT: int = 3  # ReAct 逐步下发时的并发上限
+    MASTER_FAST_PATH_ENABLED: bool = True
     MASTER_REACT_MAX_STEPS: int = 5
     MASTER_PLAN_MODE: str = "reasoner"  # 初始规划：reasoner | chat
     MASTER_REACT_MODE: str = "chat"  # 逐步决策：默认 chat 降本；复杂任务可改 reasoner
