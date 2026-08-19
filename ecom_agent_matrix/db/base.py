@@ -78,10 +78,12 @@ class AsyncPGClient:
             else settings.DB_WRITE_STATEMENT_TIMEOUT_MS
         )
         async with pool.acquire() as conn:
-            async with conn.begin():
-                async with conn.cursor() as cur:
+            async with conn.cursor() as cur:
+                # aiopg core exposes transaction contexts on Cursor, not Connection.
+                # All local settings and the business statement share this boundary.
+                async with cur.begin():
                     if role == "read":
-                        await cur.execute("SET LOCAL TRANSACTION READ ONLY")
+                        await cur.execute("SET TRANSACTION READ ONLY")
                     await cur.execute(
                         "SELECT set_config('statement_timeout', %s, true)",
                         [str(int(timeout_ms))],
