@@ -37,9 +37,9 @@ services:
       POSTGRES_USER: ${PG_USER:-postgres}
       POSTGRES_PASSWORD: ${PG_PWD:-postgres}
       POSTGRES_DB: ${PG_DB:-ecom_matrix}
-    # 仅本机可访问，避免误暴露到局域网
+    # 本机 5434 → 容器 5432，避免与本机 Postgres 5432/5433 冲突
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:5434:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ../db/business_tables.sql:/docker-entrypoint-initdb.d/01-business.sql:ro

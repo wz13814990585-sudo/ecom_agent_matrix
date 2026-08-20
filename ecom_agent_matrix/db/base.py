@@ -54,7 +54,10 @@ class AsyncPGClient:
         pool = await cls.get_pool()
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
-                await cur.execute(sql, params or [])
+                if params:
+                    await cur.execute(sql, params)
+                else:
+                    await cur.execute(sql)
                 return await cur.fetchall() if cur.description else []
 
     @classmethod
